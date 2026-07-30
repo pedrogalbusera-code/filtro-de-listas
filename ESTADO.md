@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-07-28
+Última actualización: 2026-07-30
 
 | Fase | Título                          | Estado    | Verificador |
 |------|---------------------------------|-----------|-------------|
@@ -13,7 +13,7 @@
 | F06  | Puntaje explicable              | **CERRADA** | v06: 24/24 PASA |
 | F07  | Salida ordenada                 | **CERRADA** | v07: 23/23 PASA |
 | F08  | El número (reporte de impacto)  | **CERRADA** | v08: 31/31 PASA |
-| F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA (662s) |
+| F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA (734s) |
 | F10  | Empaquetado y portfolio         | **SIGUIENTE** | —           |
 
 ## Decisiones pendientes de Pedro
@@ -257,15 +257,26 @@ escrito. Ahí no obtiene nada: ordena lo que el cliente ya tiene.
 
 5. **Prueba de aislamiento (ejecutada, output abajo).**
 
-**Tiempos por verificador (corrida de confirmación post-revert, 662s):**
+**Tiempos por verificador (corrida post-revert durante corrección, 662s):**
 - Regeneración: 271s (F00 34s, F01 31s, F02 36s, F03 32s, F04 33s, F06 35s, F07 34s, F08 35s)
 - v00-v04: <1s (verificación Python sobre CSVs recién regenerados)
 - v05: 201s (5 corridas de n8n)
 - v06: 32s, v07: 74s, v08: 39s, golden: 43s
 - **Total: 662s** (~11 min)
 
-La regeneración agrega ~271s pero v05 baja de 468s a ~200s (n8n ya está en
-caché de la regeneración). Diferencia neta: ~11s.
+**Tiempos por verificador (confirmación de cierre, 734s):**
+- Regeneración: 333s (F00 34s, F01 41s, F02 42s, F03 42s, F04 42s, F06 43s, F07 43s, F08 46s)
+- v00-v04: <1s (verificación Python sobre CSVs recién regenerados)
+- v05: 206s (5 corridas de n8n)
+- v06: 33s, v07: 80s, v08: 42s, golden: 39s
+- **Total: 734s** (~12 min)
+
+La diferencia con la corrida anterior (662s → 734s, +72s) es varianza de I/O
+de n8n: la regeneración tardó 333s vs 271s (+62s), el resto se distribuye
+entre v05-v08. Cero diferencias funcionales.
+
+La regeneración agrega ~300s pero v05 baja de 468s a ~200s (n8n ya está en
+caché de la regeneración). Diferencia neta: ~30s.
 
 **Corrección de la afirmación falsa:** la versión anterior decía "cada
 verificador corre su propio --fase con su propia ejecución de n8n". Es falso

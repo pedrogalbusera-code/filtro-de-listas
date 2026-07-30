@@ -74,7 +74,7 @@ herramientas/     generadores y utilidades
 python verificadores/correr_todo.py
 ```
 
-Tarda **~11 minutos**. Hace tres cosas en orden:
+Tarda **~12 minutos**. Hace tres cosas en orden:
 
 1. **Regenera los CSVs** de las fases F00-F04 y F06-F08 ejecutando n8n desde
    `gen_workflow.py`. Esto garantiza que los verificadores v00-v04 lean archivos
