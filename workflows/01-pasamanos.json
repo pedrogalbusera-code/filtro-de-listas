@@ -1,0 +1,155 @@
+{
+  "id": "f00pasamanos001",
+  "name": "01-pasamanos",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "n0-trigger",
+      "name": "Ejecutar manualmente",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\data\\leads_prueba_SINTETICO_1.csv",
+        "options": {}
+      },
+      "id": "n1-leer",
+      "name": "Leer CSV de disco",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "options": {
+          "headerRow": true,
+          "delimiter": ","
+        }
+      },
+      "id": "n2-extraer",
+      "name": "CSV a items",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F00 - Pasamanos. Cero logica de negocio.\n//\n// Este nodo no arregla nada: es un guardarrail.\n//\n// COMPROBADO en n8n 2.31.7 (2026-07-27): el nodo \"Extract From File\" ya\n// entrega los 6 campos como string. Los 45 telefonos con cero inicial y los\n// CUILs con guiones sobreviven sin este nodo. O sea: HOY es redundante.\n//\n// Se deja igual por dos motivos. Primero, deja el punto de entrada listo para\n// F01, que necesita un Code node justo aca. Segundo, si una version futura de\n// n8n cambia el parseo, el verificador v00 lo detecta y este nodo es donde se\n// arregla. Un guardarrail que no cuesta nada se deja puesto.\n\nconst COLUMNAS = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga'];\n\nreturn items.map((item) => {\n  const fila = {};\n  for (const col of COLUMNAS) {\n    const v = item.json[col];\n    fila[col] = (v === undefined || v === null) ? '' : String(v);\n  }\n  return { json: fila };\n});\n"
+      },
+      "id": "n3-pasamanos",
+      "name": "Pasamanos (todo string)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "options": {
+          "fileName": "salida_f00.csv",
+          "headerRow": true
+        }
+      },
+      "id": "n4-armar",
+      "name": "Items a CSV",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\salidas\\salida_f00.csv",
+        "options": {}
+      },
+      "id": "n5-escribir",
+      "name": "Escribir CSV a disco",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Ejecutar manualmente": {
+      "main": [
+        [
+          {
+            "node": "Leer CSV de disco",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer CSV de disco": {
+      "main": [
+        [
+          {
+            "node": "CSV a items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CSV a items": {
+      "main": [
+        [
+          {
+            "node": "Pasamanos (todo string)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pasamanos (todo string)": {
+      "main": [
+        [
+          {
+            "node": "Items a CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Items a CSV": {
+      "main": [
+        [
+          {
+            "node": "Escribir CSV a disco",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

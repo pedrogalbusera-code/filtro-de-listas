@@ -1,0 +1,203 @@
+{
+  "id": "f02cuil00000001",
+  "name": "03-cuil",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "n0-trigger",
+      "name": "Ejecutar manualmente",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\data\\leads_prueba_SINTETICO_1.csv",
+        "options": {}
+      },
+      "id": "n1-leer",
+      "name": "Leer CSV de disco",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "options": {
+          "headerRow": true,
+          "delimiter": ","
+        }
+      },
+      "id": "n2-extraer",
+      "name": "CSV a items",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F00 - Pasamanos. Cero logica de negocio.\n//\n// Este nodo no arregla nada: es un guardarrail.\n//\n// COMPROBADO en n8n 2.31.7 (2026-07-27): el nodo \"Extract From File\" ya\n// entrega los 6 campos como string. Los 45 telefonos con cero inicial y los\n// CUILs con guiones sobreviven sin este nodo. O sea: HOY es redundante.\n//\n// Se deja igual por dos motivos. Primero, deja el punto de entrada listo para\n// F01, que necesita un Code node justo aca. Segundo, si una version futura de\n// n8n cambia el parseo, el verificador v00 lo detecta y este nodo es donde se\n// arregla. Un guardarrail que no cuesta nada se deja puesto.\n\nconst COLUMNAS = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga'];\n\nreturn items.map((item) => {\n  const fila = {};\n  for (const col of COLUMNAS) {\n    const v = item.json[col];\n    fila[col] = (v === undefined || v === null) ? '' : String(v);\n  }\n  return { json: fila };\n});\n"
+      },
+      "id": "n3-pasamanos",
+      "name": "Pasamanos (todo string)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F01 - Normalizacion de telefono.\n//\n// Deriva dos campos nuevos por contacto: telefono_norm (canonico) y\n// telefono_tipo. El campo 'telefono' original NO se toca.\n//\n// Canonico (siempre con prefijo +54; el 9 aparece SOLO en celular):\n//   celular   +549 + 10 digitos nacionales   <- el 9 distingue celular de fijo\n//   fijo      +54  + 10 digitos nacionales\n//   ambiguo   +54  + 10 digitos nacionales   <- 10 digitos pelados, sin afirmar movil\n//   invalido  ''\n//\n// El 9 de +549 es lo unico que separa un celular de un fijo en AMBA. Si el\n// canonico lo descartara, un fijo y un celular con los mismos 8 digitos finales\n// colisionarian y F03 los fusionaria mal. Por eso el celular conserva el 9:\n//   celular +5491139927555  vs  fijo +541139927555  -> distintos.\n//\n// El tipo se infiere del FORMATO DE ENTRADA, no del canonico ya recortado.\n// Los 10 digitos sin prefijo son ambiguos de verdad (fijo o celular): NO se\n// adivina, se marcan 'ambiguo' y en F06 llevan puntaje intermedio.\n// Nada se completa: un truncado de 6 digitos es invalido, no se rellena.\n//\n// Funcion pura: mismo input -> mismo output, sin estado externo.\n\nfunction normalizarTelefono(raw) {\n  const s = (raw === undefined || raw === null) ? '' : String(raw).trim();\n  const digitos = s.replace(/\\D/g, '');\n\n  // Texto (\"sin dato\" / \"sindato\") o sin ningun digito -> invalido.\n  if (digitos.length === 0 || /[a-zA-Z]/.test(s)) {\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // Celular: unico formato movil presente, prefijo internacional con el 9.\n  if (s.startsWith('+549')) {\n    const nac = digitos.slice(3); // saca el '549' de adelante\n    if (nac.length === 10) return { telefono_norm: '+549' + nac, telefono_tipo: 'celular' };\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // Fijo: 11 digitos con 0 inicial (011-... o 011... sin guion). Nacional = sin el 0.\n  if (digitos.length === 11 && digitos[0] === '0') {\n    return { telefono_norm: '+54' + digitos.slice(1), telefono_tipo: 'fijo' };\n  }\n\n  // Ambiguo: exactamente 10 digitos sin prefijo. Puede ser fijo o celular.\n  if (digitos.length === 10 && !s.startsWith('+')) {\n    return { telefono_norm: '+54' + digitos, telefono_tipo: 'ambiguo' };\n  }\n\n  // Todo lo demas (truncado de 6, largos raros) -> invalido. No se completa.\n  return { telefono_norm: '', telefono_tipo: 'invalido' };\n}\n\nreturn items.map((item) => {\n  const fila = { ...item.json };\n  const r = normalizarTelefono(fila.telefono);\n  fila.telefono_norm = r.telefono_norm;\n  fila.telefono_tipo = r.telefono_tipo;\n  return { json: fila };\n});\n"
+      },
+      "id": "n4-telefono",
+      "name": "Normalizar telefono",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F02 - Validacion de CUIL (formato + digito verificador modulo 11).\n//\n// Deriva cuil_norm (11 digitos como string, sin guiones, sin perder ceros) y\n// cuil_valido (booleano). El campo 'cuil' original NO se toca.\n//\n// Modulo 11: pesos 5 4 3 2 7 6 5 4 3 2 sobre los primeros 10 digitos.\n//   suma de productos, resto = suma % 11\n//   resto 0 -> DV 0\n//   resto 1 -> INVALIDO   (ver abajo)\n//   si no   -> DV = 11 - resto\n//\n// POR QUE resto 1 -> INVALIDO (decision de Pedro, correccion 2026-07-27):\n// Bajo la regla de AFIP, un CUIL que da resto 1 CON SU PROPIO PREFIJO no puede\n// existir: AFIP lo habria reemitido con prefijo 23. Y la reemision no es una\n// excepcion al algoritmo, es consistente con el: cambiar el prefijo altera el\n// digito que pesa 4 y el resto deja de ser 1. Verificado por fuerza bruta:\n// 27272/27272 reemisiones femeninas (23-DNI-4) y 27273/27273 masculinas\n// (23-DNI-9) validan con ESTE mismo algoritmo simple. O sea: los CUIL reemitidos\n// pasan bien; no hay que modelar sexo ni prefijos. Aceptar resto 1 como DV 9\n// solo crearia una colision (DV 9 sale de resto 1 y de resto 2) que debilita el\n// verificador. Por eso resto 1 se rechaza.\n//\n// Prefijos validos: 20 23 24 27 (persona fisica); 30 33 34 (juridica).\n// Formato correcto + DV incorrecto = INVALIDO. No hay estado intermedio.\n// Funcion pura.\n\nconst PREFIJOS = new Set(['20', '23', '24', '27', '30', '33', '34']);\nconst PESOS = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];\n\nfunction validarCuil(raw) {\n  const norm = (raw === undefined || raw === null ? '' : String(raw)).replace(/\\D/g, '');\n  if (norm.length !== 11) return { cuil_norm: norm, cuil_valido: false, cuil_dudoso: false };\n  if (!PREFIJOS.has(norm.slice(0, 2))) return { cuil_norm: norm, cuil_valido: false, cuil_dudoso: false };\n\n  let suma = 0;\n  for (let i = 0; i < 10; i++) suma += Number(norm[i]) * PESOS[i];\n  const resto = suma % 11;\n\n  // cuil_dudoso: el CUIL da resto 1 con su propio prefijo -> RECHAZADO. AFIP lo\n  // habria reemitido con prefijo 23. Se marca para que el rechazo sea auditable.\n  if (resto === 1) {\n    return { cuil_norm: norm, cuil_valido: false, cuil_dudoso: true };\n  }\n\n  const dv = resto === 0 ? 0 : 11 - resto;\n  return { cuil_norm: norm, cuil_valido: dv === Number(norm[10]), cuil_dudoso: false };\n}\n\nreturn items.map((item) => {\n  const fila = { ...item.json };\n  const r = validarCuil(fila.cuil);\n  fila.cuil_norm = r.cuil_norm;\n  fila.cuil_valido = r.cuil_valido;\n  fila.cuil_dudoso = r.cuil_dudoso;\n  return { json: fila };\n});\n"
+      },
+      "id": "n5-cuil",
+      "name": "Validar CUIL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "options": {
+          "fileName": "salida_f02.csv",
+          "headerRow": true
+        }
+      },
+      "id": "n8-armar",
+      "name": "Items a CSV",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\salidas\\salida_f02.csv",
+        "options": {}
+      },
+      "id": "n9-escribir",
+      "name": "Escribir CSV a disco",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Ejecutar manualmente": {
+      "main": [
+        [
+          {
+            "node": "Leer CSV de disco",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer CSV de disco": {
+      "main": [
+        [
+          {
+            "node": "CSV a items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CSV a items": {
+      "main": [
+        [
+          {
+            "node": "Pasamanos (todo string)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pasamanos (todo string)": {
+      "main": [
+        [
+          {
+            "node": "Normalizar telefono",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar telefono": {
+      "main": [
+        [
+          {
+            "node": "Validar CUIL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar CUIL": {
+      "main": [
+        [
+          {
+            "node": "Items a CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Items a CSV": {
+      "main": [
+        [
+          {
+            "node": "Escribir CSV a disco",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

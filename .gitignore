@@ -1,0 +1,28 @@
+# Archivos generados por la suite (se regeneran con gen_workflow.py + n8n)
+salidas/salida_*.csv
+salidas/reporte_*.md
+salidas/_golden_tmp_*
+
+# Excepciones: archivos en salidas/ que SI se versionan
+# - Los golden no matchean salida_* asi que entran solos
+# - Los adversarios son la unica evidencia de esa corrida (los workflows se borraron)
+!salidas/salida_adv*.csv
+
+# Python
+__pycache__/
+*.pyc
+
+# n8n data
+.n8n/
+
+# Node
+node_modules/
+
+# Temporales
+_to_delete/
+
+# CSV duplicado en la raiz (el original esta en data/)
+/leads_prueba_SINTETICO_1.csv
+
+# Archivo suelto, no es del proyecto
+Kit-de-calle.pdf

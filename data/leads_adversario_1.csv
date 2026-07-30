@@ -1,0 +1,49 @@
+nombre,cuil,telefono,localidad,origen,fecha_carga
+T01 Ana Ruiz,20-31445902-5,+54 11 4161-7956,Castelar,referido,2026-07-01
+T02 Bruno Paz,27-32118745-0,+54 9 11 4161 7956,Haedo,formulario web,2026-07-02
+T03 Celia Mota,20-33920014-9,549 11 4161 7956,Morón,evento,2026-07-03
+T04 Dario Sena,24-34501277-6,011 15 4161-7956,Hurlingham,campaña Meta,2026-07-04
+T05 Elsa Vidal,27-35110488-6,15-4161-7956,Ituzaingó,base propia,2026-07-05
+T06 Fabio Luna,20-36002911-6,4161-7956,Ramos Mejía,referido,2026-07-06
+T07 Gina Roldán,23-37451200-5,(011) 4161-7956,San Justo,evento,2026-07-07
+T08 Hugo Ferro,20-38112003-2,1141617956.0,Villa Luzuriaga,referido,2026-07-08
+T09 Ivan Costa,24-39220145-5,1.14162E+09,Castelar,campaña Meta,2026-07-09
+T10 Jana Ortiz,27-40330288-6,1141617956 / 1165385561,Haedo,formulario web,2026-07-10
+T11 Kevin Diaz,20-41007733-8,  1155551111  ,Morón,referido,2026-07-11
+T12 Lara Sosa,27-41880422-5,+549 11 5555-1111,Morón,evento,2026-07-12
+T13 Mateo Rey,24-42115509-3,011-45551111,Hurlingham,base propia,2026-07-13
+T14 Nadia Bravo,23-42998100-9,1145551111,Hurlingham,referido,2026-07-14
+T15 Omar Vega,20-43220017-6,1168442737,MORÓN,referido,2026-07-15
+T16 Pia Nuñez,27-43771902-6,1168442738,moron,evento,2026-07-16
+T17 Raul Gomez,20-44001255-9,1168442739, Haedo ,campaña Meta,2026-07-17
+T18 Sara Molina,24-44552388-3,1168442740,Ramos Mejia,referido,2026-07-18
+T19 Tomas Cruz,20-45110944-9,1168442741,Morón (Buenos Aires),evento,2026-07-19
+T20 Uma Prieto,27-45880233-0,1168442742,Ciudad de Buenos Aires,referido,2026-07-20
+T21 Vito Alonso,23-46220188-5,1168442743,,base propia,2026-07-21
+T22 Wanda Rios,20-46991044-0,1168442744,Merlo,referido,2026-07-22
+T23 Xul Peralta,,1168442745,Castelar,evento,2026-07-23
+T24 Yago Medina,20-4412233,1168442746,Haedo,referido,2026-07-24
+T25 Zoe Arce,99-44122335-4,1168442747,Morón,campaña Meta,2026-07-25
+T26 Abel Ponce,20314459025,1168442748,Castelar,referido,2026-07-26
+T27 Bea Quiroga,27.32118745.0,1168442749,Haedo,evento,2026-07-27
+T28 Ciro Duarte,24 34501277 6,1168442750,Morón,referido,2026-07-28
+T29 Dana Miranda,20-47220011-0,1168442751,Castelar,evento,2026-07-28
+T30 Erik Salas,30-71234567-1,1168442752,Haedo,base propia,2026-06-30
+T31 Flor Cabrera,20-31445902-5,1168442753,Castelar,referido,2026-05-01
+T32 Gael Ibarra,20-48110022-5,1168442754,Morón,evento,10/04/2026
+T33 Hana Correa,27-48771033-9,1168442755,Haedo,referido,04/10/2026
+T34 Iker Ramos,24-49220144-4,1168442756,Castelar,campaña Meta,10-abr-26
+T35 Julia Naveiro,20-49881255-5,1168442757,Hurlingham,referido,
+T36 Kai Ledesma,27-50110366-2,1168442758,Ituzaingó,evento,2026-13-45
+T37 Lena Ocampo,20-50772477-9,1168442759,Morón,referido,2027-01-15
+T38 Mara Zabala,24-51220588-3,1168442760,Haedo,base propia,2019-03-02
+,20-51881699-4,1168442761,Castelar,referido,2026-07-20
+"T40 PEREZ, JUAN",27-52110700-1,1168442762,Morón,evento,2026-07-21
+T41   Nora   Vera  ,20-52772811-9,1168442763,Haedo,referido,2026-07-22
+T42 Ada Lovelace,24-53220922-2,1168442764,Castelar,campaña Meta,2026-07-23
+T42 Ada Lovelace ,24-53220922-2,1168442764,Castelar,campaña Meta,2026-07-23
+T44 Beto Silva,20-53881033-9,sin  dato,Merlo,referido,2026-07-24
+T45 Cora Iglesias,27-54110144-1,N/D,Moreno,evento,2026-07-25
+T46 Dante Ruiz,20-54772255-9,0,Castelar,referido,2026-07-26
+T47 Eva Lopez,20-30000002-9,1168442765,Haedo,referido,2026-07-27
+T48 Fina Vera,23-31000009-4,1168442766,Morón,evento,2026-07-27
