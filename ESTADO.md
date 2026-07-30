@@ -13,7 +13,7 @@
 | F06  | Puntaje explicable              | **CERRADA** | v06: 24/24 PASA |
 | F07  | Salida ordenada                 | **CERRADA** | v07: 23/23 PASA |
 | F08  | El número (reporte de impacto)  | **CERRADA** | v08: 31/31 PASA |
-| F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA (734s) |
+| F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA + 9 pendientes OK |
 | F10  | Empaquetado y portfolio         | **SIGUIENTE** | —           |
 
 ## Decisiones pendientes de Pedro
@@ -231,7 +231,72 @@ escrito. Ahí no obtiene nada: ordena lo que el cliente ya tiene.
 
 ---
 
+## Hallazgos adversarios — estado de los 13
+
+| #  | Id  | Categoría | Estado | Detalle |
+|----|-----|-----------|--------|---------|
+| 1  | T01 | teléfono  | **registrado** | Fijo internacional (`+54 11 …`) → invalido. Falso inválido. |
+| 2  | T02 | teléfono  | **registrado** | Celular con espacio (`+54 9 11 …`) → invalido. El más grave. |
+| 3  | T03 | teléfono  | **registrado** | Internacional sin `+` (`549 …`) → invalido. |
+| 4  | T04 | teléfono  | **registrado** | Formato viejo con 15 (`011 15 …`) → invalido. |
+| 5  | T05 | teléfono  | **registrado** | `15-…` sin área → ambiguo con norm incorrecta. Peligroso. |
+| 6  | T10 | teléfono  | **registrado** | Dos teléfonos en una celda → invalido. |
+| 7  | T19 | localidad | **registrado** | `Morón (Buenos Aires)` → fuera de zona. Comparación literal. |
+| 8  | T21 | localidad | **registrado** | Localidad vacía → fuera de zona. Indistinguible de "vive lejos". |
+| 9  | T31 | dedup     | **registrado** | Perdedor con tel válido: se pierde. No transfiere al ganador. |
+| 10 | T08 | cosmético | no incluido | `.0` de Excel → invalido correcto, sin motivo específico. |
+| 11 | T09 | cosmético | no incluido | Notación científica → invalido correcto, sin aviso de archivo dañado. |
+| 12 | —   | archivo 2 | **F11** | Basura arriba del header → crash (NodeOperationError). |
+| 13 | —   | archivo 3 | **F11** | Separador `;` → 5 filas vacías con cara de correctas. El peor. |
+
+**Registrados (9):** en `verificadores/pendientes_conocidos.py`, verificados por
+`v09_pendientes.py`. La suite los reporta en su propia sección.
+
+**F11 (2):** son trabajo de tolerancia de entrada (mapeo de columnas, detección
+de separador). No son bugs del pipeline, son funcionalidad que no existe. Van
+en su propia fase cuando se decida construirla.
+
+**No incluidos (2):** cosméticos. El pipeline los clasifica correctamente
+(invalido), pero no avisa del motivo específico (artefacto de Excel).
+
+---
+
 ## Bitácora
+
+**2026-07-30 — Pendientes conocidos integrados a la suite.** 9 hallazgos del
+archivo adversario 1 registrados en `verificadores/pendientes_conocidos.py`,
+verificados por `v09_pendientes.py`. La suite (`correr_todo.py`) los reporta
+en su propia sección, separados del conteo 10/10 de regresión.
+
+Valores medidos corriendo `leads_adversario_1.csv` por F08 (corte 2026-07-28)
+el 2026-07-30: los 9 coinciden con `HALLAZGOS_ADVERSARIO.md` del 2026-07-28.
+Ningún comportamiento cambió entre sesiones.
+
+**Prueba de aislamiento — arreglo de T02:**
+
+Cambio: en `gen_workflow.py`, normalizarTelefono, se agregó
+`const sNorm = s.replace(/\\s+/g, '');` y se cambió el check de `s.startsWith`
+a `sNorm.startsWith`. Eso hace que `+54 9 11 4161 7956` (T02) pase de
+`invalido` a `celular`.
+
+Corrida con el arreglo (exit 1):
+
+```
+  OK      T01 (telefono): sigue igual
+  CAMBIO  T02 (telefono): telefono_tipo: esperaba [invalido] pero dio [celular]; telefono_norm: esperaba [] pero dio [+5491141617956]
+  OK      T03 (telefono): sigue igual
+  OK      T04 (telefono): sigue igual
+  OK      T05 (telefono): sigue igual
+  OK      T10 (telefono): sigue igual
+  OK      T19 (localidad): sigue igual
+  OK      T21 (localidad): sigue igual
+  OK      T31 (dedup): sigue igual
+
+  Pendientes: 9 registrados, 8 sin cambio, 1 CAMBIARON
+  ATENCION: algun pendiente cambio de comportamiento sin documentarlo.
+```
+
+Revertido: 9/9 sin cambio, exit 0.
 
 **2026-07-29 — F09 cerrada.** Suite de regresión original, 10/10 PASA en 651s.
 

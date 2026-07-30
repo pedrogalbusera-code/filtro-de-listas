@@ -285,6 +285,24 @@ def main():
     resultados.append(("golden", estado_g, detalle_g, dt_g))
     print(f"    {estado_g}: {detalle_g}  ({dt_g:.0f}s)")
 
+    # --- Pendientes conocidos (seccion separada) ---
+    print(f"\n>>> pendientes: v09_pendientes.py")
+    t0_pend = time.time()
+    r_pend = subprocess.run(
+        [sys.executable, os.path.join(BASE, "verificadores", "v09_pendientes.py")],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    dt_pend = time.time() - t0_pend
+    resumen_pend = extraer_resumen(r_pend.stdout)
+    pend_ok = r_pend.returncode == 0
+    if pend_ok:
+        print(f"    {resumen_pend}  ({dt_pend:.0f}s)")
+    else:
+        print(f"    FALLA: {resumen_pend}  ({dt_pend:.0f}s)")
+        ultimas = r_pend.stdout.strip().split("\n")[-8:] if r_pend.stdout else []
+        for l in ultimas:
+            print(f"    | {l}")
+
     dt_total = time.time() - t_total
 
     print("\n" + "=" * 65)
@@ -303,9 +321,15 @@ def main():
         print(f"  Suite de regresion: {total}/{total} PASA  (total {dt_total:.0f}s)")
     else:
         print(f"  Suite de regresion: {total - fallos}/{total} PASA, {fallos} FALLA  (total {dt_total:.0f}s)")
+
+    print("\n  " + "-" * 61)
+    pend_marca = "OK" if pend_ok else "CAMBIO"
+    print(f"  {'pend':<8} {pend_marca:<7} {dt_pend:>5.0f}s   {resumen_pend}")
+    print("  " + "-" * 61)
+    print(f"  Pendientes conocidos: {resumen_pend}")
     print("=" * 65)
 
-    sys.exit(0 if fallos == 0 else 1)
+    sys.exit(0 if (fallos == 0 and pend_ok) else 1)
 
 
 if __name__ == "__main__":
