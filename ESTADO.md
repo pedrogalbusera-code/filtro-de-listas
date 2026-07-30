@@ -13,7 +13,7 @@
 | F06  | Puntaje explicable              | **CERRADA** | v06: 24/24 PASA |
 | F07  | Salida ordenada                 | **CERRADA** | v07: 23/23 PASA |
 | F08  | El número (reporte de impacto)  | **CERRADA** | v08: 31/31 PASA |
-| F09  | Suite de regresión              | **CERRADA** | correr_todo: 10/10 PASA (651s) |
+| F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA (662s) |
 | F10  | Empaquetado y portfolio         | **SIGUIENTE** | —           |
 
 ## Decisiones pendientes de Pedro
@@ -233,29 +233,100 @@ escrito. Ahí no obtiene nada: ordena lo que el cliente ya tiene.
 
 ## Bitácora
 
-**2026-07-29 — F09 cerrada.** `verificadores/correr_todo.py` — un solo comando
-que corre los 9 verificadores (v00-v08) + comparación contra golden file.
-**10/10 PASA en 651 segundos** (~11 min).
+**2026-07-29 — F09 cerrada.** Suite de regresión original, 10/10 PASA en 651s.
 
-**Componentes:**
-- `correr_todo.py`: ejecuta cada verificador como subprocess, extrae resumen,
-  mide tiempo, imprime tabla consolidada. Después corre el pipeline F08 completo
-  y compara el CSV comercial contra `salidas/golden_2026-07-28.csv` por SHA-256.
-- `salidas/golden_2026-07-28.csv`: snapshot del CSV comercial (9 columnas, 200
-  filas) con fecha_corte=2026-07-28. Cualquier cambio de comportamiento en
-  cualquier fase produce un hash distinto.
+**2026-07-30 — CORRECCIÓN F09.** Cinco problemas corregidos:
 
-**Tiempos por verificador:** v00-v04 <1s (verificación Python pura sobre CSVs
-existentes), v05 468s (5 corridas de n8n: determinismo, corte variable,
-adversario), v06 39s, v07 71s (2 corridas + determinismo), v08 35s, golden 37s.
+1. **Pasada de regeneración.** v00-v04 leían CSVs de días anteriores (27-28/07)
+   en vez de regenerarlos. Ahora `correr_todo.py` ejecuta F00-F04 y F06-F08
+   desde `gen_workflow.py` antes del loop. F05 no se incluye (v05 la ejecuta
+   sola). Si la regeneración falla, la suite aborta.
 
-**Criterio 2 (independencia):** cada verificador corre su propio --fase con su
-propia ejecución de n8n. Romper una fase afecta a su verificador y a los de
-fases posteriores (porque las fases son acumulativas), pero no a los anteriores.
-Esto es inherente a la arquitectura de workflow acumulativo, no un defecto de
-los verificadores.
+2. **Golden de auditoría.** El golden solo cubría el CSV comercial (9 columnas).
+   Los campos internos (`es_duplicado`, `telefono_match`, `cuil_dudoso`, etc.)
+   vivían únicamente en el de auditoría y no se verificaban. Ahora se comparan
+   los dos por SHA-256: `golden_2026-07-28.csv` y
+   `golden_2026-07-28_auditoria.csv`.
 
-**README.md** ya tenía la sección de suite de regresión con instrucciones.
+3. **Comando de regeneración del golden.** `python verificadores/correr_todo.py
+   --golden` regenera los dos golden files sin correr la suite. Separado para
+   que el golden nunca se regenere automáticamente.
+
+4. **Repositorio git.** `git init` con `.gitignore`. Primer commit con todo el
+   estado actual. Los dos golden están versionados junto con `gen_workflow.py`.
+
+5. **Prueba de aislamiento (ejecutada, output abajo).**
+
+**Tiempos por verificador (corrida de confirmación post-revert, 662s):**
+- Regeneración: 271s (F00 34s, F01 31s, F02 36s, F03 32s, F04 33s, F06 35s, F07 34s, F08 35s)
+- v00-v04: <1s (verificación Python sobre CSVs recién regenerados)
+- v05: 201s (5 corridas de n8n)
+- v06: 32s, v07: 74s, v08: 39s, golden: 43s
+- **Total: 662s** (~11 min)
+
+La regeneración agrega ~271s pero v05 baja de 468s a ~200s (n8n ya está en
+caché de la regeneración). Diferencia neta: ~11s.
+
+**Corrección de la afirmación falsa:** la versión anterior decía "cada
+verificador corre su propio --fase con su propia ejecución de n8n". Es falso
+para v00-v04: son verificación Python pura sobre CSVs existentes, no ejecutan
+n8n. La pasada de regeneración corrige esto generando esos CSVs antes del loop.
+
+**Pendiente: los 13 hallazgos adversarios** no van en esta sesión. Van en su
+propia sesión, antes de F10. Motivo: el trabajo de esta corrección es que la
+suite deje de mentir; agregarle casos nuevos a una suite que todavía mentía es
+construir arriba de algo que no se sostiene.
+
+### Prueba de aislamiento — output real
+
+**Cambio:** en `gen_workflow.py`, JS_F02, línea del `resto === 1`:
+`cuil_valido: false` → `cuil_valido: true` (los 19 CUILs de resto 1 pasan
+como válidos en vez de inválidos).
+
+**Corrida con regla rota (5/10 PASA, 5 FALLA):**
+
+```
+  Verif    Estado   Tiempo   Detalle
+  -------------------------------------------------------------
+  v00      PASA        0s   RESULTADO: PASA (10 checks)
+  v01      PASA        0s   RESULTADO: PASA (25 checks)
+  v02      FALLA       0s   RESULTADO: FALLA (6 de 22 checks)
+  v03      PASA        0s   RESULTADO: PASA (29 checks)
+  v04      PASA        0s   RESULTADO: PASA (18 checks)
+  v05      PASA      233s   RESULTADO: PASA (51 checks)
+  v06      FALLA      35s   v06_puntaje: 21/24 PASA, 3 FALLA
+  v07      FALLA      68s   v07_salida: 21/23 PASA, 2 FALLA
+  v08      FALLA      42s   v08_reporte: 29/31 PASA, 2 FALLA
+  golden   FALLA      37s   comercial difiere / auditoria difiere
+  -------------------------------------------------------------
+  Suite de regresion: 5/10 PASA, 5 FALLA  (total 763s)
+```
+
+**Lectura:** v00, v01 pasan (anteriores a F02, sin dependencia). v02 falla (la
+fase rota). v03, v04, v05 pasan (no dependen de `cuil_valido`). v06-v08 y
+golden fallan (dependen del puntaje, que usa `cuil_valido`). El patrón es
+direccional: la rotura se propaga hacia adelante por dependencia real del
+pipeline, no por acoplamiento de los verificadores.
+
+**Corrida después de revertir:** `git checkout -- herramientas/gen_workflow.py`,
+10/10 PASA (662s):
+
+```
+  Verif    Estado   Tiempo   Detalle
+  -------------------------------------------------------------
+  v00      PASA        0s   RESULTADO: PASA (10 checks)
+  v01      PASA        0s   RESULTADO: PASA (25 checks)
+  v02      PASA        0s   RESULTADO: PASA (22 checks)
+  v03      PASA        0s   RESULTADO: PASA (29 checks)
+  v04      PASA        0s   RESULTADO: PASA (18 checks)
+  v05      PASA      201s   RESULTADO: PASA (51 checks)
+  v06      PASA       32s   v06_puntaje: 24/24 PASA
+  v07      PASA       74s   v07_salida: 23/23 PASA
+  v08      PASA       39s   v08_reporte: 31/31 PASA
+  golden   PASA       43s   SHA-256 coincide com=9a6884603f91... aud=ae6fcc5f146d...
+  -------------------------------------------------------------
+  Suite de regresion: 10/10 PASA  (total 662s)
+```
 
 **2026-07-28 — F08 cerrada.** Workflow `09-reporte` (8 nodos Code + 3 ramas de
 salida: CSV comercial, CSV auditoría, reporte Markdown). Genera automáticamente

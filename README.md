@@ -68,15 +68,42 @@ herramientas/     generadores y utilidades
 
 ## Suite de regresión (F09)
 
-Una sesión no es completa sin saber que el cambio no rompió nada más. Para eso:
+### Correr la suite
 
 ```powershell
 python verificadores/correr_todo.py
 ```
 
-Ejecuta los 9 verificadores (v00 a v08) en secuencia, consolida resultados y devuelve exit code 0 si todos pasan. **Esto es lo que corre cuando un cliente pide "cambiar el peso del teléfono"** — es la prueba de que el número de ahorro no cambió sin explicación.
+Tarda **~11 minutos**. Hace tres cosas en orden:
 
-El archivo `salidas/golden_2026-07-28.csv` es la referencia inmutable del CSV de prueba con fecha de corte fija. Se regenera cada vez que hay un cambio de comportamiento deliberado y se versionan ambos (golden + JSON del workflow) juntos. Cualquier diferencia contra el golden es un cambio de comportamiento.
+1. **Regenera los CSVs** de las fases F00-F04 y F06-F08 ejecutando n8n desde
+   `gen_workflow.py`. Esto garantiza que los verificadores v00-v04 lean archivos
+   frescos de esta corrida, no de corridas anteriores.
+2. **Corre los 9 verificadores** (v00 a v08) en secuencia. Cada uno imprime su
+   tabla de checks. v05-v08 ejecutan n8n por su cuenta (v05 hace 5 corridas).
+3. **Compara contra los golden files** por SHA-256: `golden_2026-07-28.csv`
+   (comercial, 9 columnas) y `golden_2026-07-28_auditoria.csv` (26 columnas).
+
+Exit code 0 si todo pasa, 1 si algo falla.
+
+### Regenerar los golden files
+
+```powershell
+python verificadores/correr_todo.py --golden
+```
+
+Comando separado, nunca parte de correr la suite. Ejecuta el pipeline completo
+F08 con fecha de corte 2026-07-28 y sobreescribe los dos golden. Imprime los
+SHA-256 nuevos.
+
+**Cuándo regenerar:** después de un cambio de comportamiento **deliberado** (un
+peso, un umbral, una regla nueva). Si el golden se pone rojo sin que hayas
+tocado la lógica, el cambio no es deliberado y hay que investigar, no regenerar.
+
+**Qué mirar cuando el golden falla:** `git diff` sobre `herramientas/gen_workflow.py`
+muestra qué cambió en la lógica. Si el cambio es correcto, regenerar con
+`--golden` y commitear los dos golden junto con el `gen_workflow.py` que los
+produjo. Si no sabés por qué cambió, no regeneres.
 
 ---
 
