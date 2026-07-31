@@ -1,6 +1,7 @@
 # Archivos generados por la suite (se regeneran con gen_workflow.py + n8n)
 salidas/salida_*.csv
 salidas/reporte_*.md
+salidas/reporte.md
 salidas/_golden_tmp_*
 
 # Excepciones: archivos en salidas/ que SI se versionan
@@ -26,3 +27,7 @@ _to_delete/
 
 # Archivo suelto, no es del proyecto
 Kit-de-calle.pdf
+
+# Documentos comerciales internos (modelo de cobro, estrategia de venta)
+guion-de-venta.md
+CATALOGO-FILTROS.md

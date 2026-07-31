@@ -1,0 +1,407 @@
+{
+  "id": "f08reporte00001",
+  "name": "09-reporte",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "n0-trigger",
+      "name": "Ejecutar manualmente",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\data\\leads_prueba_SINTETICO_1.csv",
+        "options": {}
+      },
+      "id": "n1-leer",
+      "name": "Leer CSV de disco",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "options": {
+          "headerRow": true,
+          "delimiter": ","
+        }
+      },
+      "id": "n2-extraer",
+      "name": "CSV a items",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F00 - Pasamanos. Cero logica de negocio.\n//\n// Este nodo no arregla nada: es un guardarrail.\n//\n// COMPROBADO en n8n 2.31.7 (2026-07-27): el nodo \"Extract From File\" ya\n// entrega los 6 campos como string. Los 45 telefonos con cero inicial y los\n// CUILs con guiones sobreviven sin este nodo. O sea: HOY es redundante.\n//\n// Se deja igual por dos motivos. Primero, deja el punto de entrada listo para\n// F01, que necesita un Code node justo aca. Segundo, si una version futura de\n// n8n cambia el parseo, el verificador v00 lo detecta y este nodo es donde se\n// arregla. Un guardarrail que no cuesta nada se deja puesto.\n\nconst COLUMNAS = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga'];\n\nreturn items.map((item) => {\n  const fila = {};\n  for (const col of COLUMNAS) {\n    const v = item.json[col];\n    fila[col] = (v === undefined || v === null) ? '' : String(v);\n  }\n  return { json: fila };\n});\n"
+      },
+      "id": "n3-pasamanos",
+      "name": "Pasamanos (todo string)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F01 - Normalizacion de telefono.\n//\n// Deriva dos campos nuevos por contacto: telefono_norm (canonico) y\n// telefono_tipo. El campo 'telefono' original NO se toca.\n//\n// Canonico (siempre con prefijo +54; el 9 aparece SOLO en celular):\n//   celular   +549 + 10 digitos nacionales   <- el 9 distingue celular de fijo\n//   fijo      +54  + 10 digitos nacionales\n//   ambiguo   +54  + 10 digitos nacionales   <- 10 digitos pelados, sin afirmar movil\n//   invalido  ''\n//\n// El 9 de +549 es lo unico que separa un celular de un fijo en AMBA. Si el\n// canonico lo descartara, un fijo y un celular con los mismos 8 digitos finales\n// colisionarian y F03 los fusionaria mal. Por eso el celular conserva el 9:\n//   celular +5491139927555  vs  fijo +541139927555  -> distintos.\n//\n// El tipo se infiere del FORMATO DE ENTRADA, no del canonico ya recortado.\n// Los 10 digitos sin prefijo son ambiguos de verdad (fijo o celular): NO se\n// adivina, se marcan 'ambiguo' y en F06 llevan puntaje intermedio.\n// Nada se completa: un truncado de 6 digitos es invalido, no se rellena.\n//\n// Funcion pura: mismo input -> mismo output, sin estado externo.\n\nfunction normalizarTelefono(raw) {\n  const s = (raw === undefined || raw === null) ? '' : String(raw).trim();\n  const digitos = s.replace(/\\D/g, '');\n\n  // Texto (\"sin dato\" / \"sindato\") o sin ningun digito -> invalido.\n  if (digitos.length === 0 || /[a-zA-Z]/.test(s)) {\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // Celular: unico formato movil presente, prefijo internacional con el 9.\n  if (s.startsWith('+549')) {\n    const nac = digitos.slice(3); // saca el '549' de adelante\n    if (nac.length === 10) return { telefono_norm: '+549' + nac, telefono_tipo: 'celular' };\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // Fijo: 11 digitos con 0 inicial (011-... o 011... sin guion). Nacional = sin el 0.\n  if (digitos.length === 11 && digitos[0] === '0') {\n    return { telefono_norm: '+54' + digitos.slice(1), telefono_tipo: 'fijo' };\n  }\n\n  // Ambiguo: exactamente 10 digitos sin prefijo. Puede ser fijo o celular.\n  if (digitos.length === 10 && !s.startsWith('+')) {\n    return { telefono_norm: '+54' + digitos, telefono_tipo: 'ambiguo' };\n  }\n\n  // Todo lo demas (truncado de 6, largos raros) -> invalido. No se completa.\n  return { telefono_norm: '', telefono_tipo: 'invalido' };\n}\n\nreturn items.map((item) => {\n  const fila = { ...item.json };\n  const r = normalizarTelefono(fila.telefono);\n  fila.telefono_norm = r.telefono_norm;\n  fila.telefono_tipo = r.telefono_tipo;\n  return { json: fila };\n});\n"
+      },
+      "id": "n4-telefono",
+      "name": "Normalizar telefono",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F02 - Validacion de CUIL (formato + digito verificador modulo 11).\n//\n// Deriva cuil_norm (11 digitos como string, sin guiones, sin perder ceros) y\n// cuil_valido (booleano). El campo 'cuil' original NO se toca.\n//\n// Modulo 11: pesos 5 4 3 2 7 6 5 4 3 2 sobre los primeros 10 digitos.\n//   suma de productos, resto = suma % 11\n//   resto 0 -> DV 0\n//   resto 1 -> INVALIDO   (ver abajo)\n//   si no   -> DV = 11 - resto\n//\n// POR QUE resto 1 -> INVALIDO (decision de Pedro, correccion 2026-07-27):\n// Bajo la regla de AFIP, un CUIL que da resto 1 CON SU PROPIO PREFIJO no puede\n// existir: AFIP lo habria reemitido con prefijo 23. Y la reemision no es una\n// excepcion al algoritmo, es consistente con el: cambiar el prefijo altera el\n// digito que pesa 4 y el resto deja de ser 1. Verificado por fuerza bruta:\n// 27272/27272 reemisiones femeninas (23-DNI-4) y 27273/27273 masculinas\n// (23-DNI-9) validan con ESTE mismo algoritmo simple. O sea: los CUIL reemitidos\n// pasan bien; no hay que modelar sexo ni prefijos. Aceptar resto 1 como DV 9\n// solo crearia una colision (DV 9 sale de resto 1 y de resto 2) que debilita el\n// verificador. Por eso resto 1 se rechaza.\n//\n// Prefijos validos: 20 23 24 27 (persona fisica); 30 33 34 (juridica).\n// Formato correcto + DV incorrecto = INVALIDO. No hay estado intermedio.\n// Funcion pura.\n\nconst PREFIJOS = new Set(['20', '23', '24', '27', '30', '33', '34']);\nconst PESOS = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];\n\nfunction validarCuil(raw) {\n  const norm = (raw === undefined || raw === null ? '' : String(raw)).replace(/\\D/g, '');\n  if (norm.length !== 11) return { cuil_norm: norm, cuil_valido: false, cuil_dudoso: false };\n  if (!PREFIJOS.has(norm.slice(0, 2))) return { cuil_norm: norm, cuil_valido: false, cuil_dudoso: false };\n\n  let suma = 0;\n  for (let i = 0; i < 10; i++) suma += Number(norm[i]) * PESOS[i];\n  const resto = suma % 11;\n\n  // cuil_dudoso: el CUIL da resto 1 con su propio prefijo -> RECHAZADO. AFIP lo\n  // habria reemitido con prefijo 23. Se marca para que el rechazo sea auditable.\n  if (resto === 1) {\n    return { cuil_norm: norm, cuil_valido: false, cuil_dudoso: true };\n  }\n\n  const dv = resto === 0 ? 0 : 11 - resto;\n  return { cuil_norm: norm, cuil_valido: dv === Number(norm[10]), cuil_dudoso: false };\n}\n\nreturn items.map((item) => {\n  const fila = { ...item.json };\n  const r = validarCuil(fila.cuil);\n  fila.cuil_norm = r.cuil_norm;\n  fila.cuil_valido = r.cuil_valido;\n  fila.cuil_dudoso = r.cuil_dudoso;\n  return { json: fila };\n});\n"
+      },
+      "id": "n5-cuil",
+      "name": "Validar CUIL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F03 - Deduplicacion. NADA se borra: un duplicado es una etiqueta, no un delete.\n//\n// id_fila estable (posicion original, 1-based). Deriva telefono_match,\n// es_duplicado, duplicado_de, motivo_duplicado. F01 (telefono_norm) y F02 no se\n// recalculan; solo el telefono_tipo del GANADOR puede adoptar un tipo mas\n// especifico de su linea (ver ADOPCION abajo).\n//\n// CLAVE DE MATCH (decision de Pedro, ver ESTADO): se agrupa por los ULTIMOS 10\n// DIGITOS NACIONALES -> telefono_match, ignorando el 9 del celular. En AMBA un\n// mismo 11-XXXX-XXXX es una sola linea; el 9 indica el TIPO, no la identidad.\n// Asi un celular (+549...) y el mismo numero escrito pelado (ambiguo) colapsan.\n// Los invalidos tienen telefono_norm vacio -> telefono_match vacio -> NO agrupan\n// entre si (el bug mas caro de la fase seria un grupo falso de 82).\n//\n// Identidad: misma fila si comparten cuil_norm (no vacio) O telefono_match (no\n// vacio). union-find -> UN ganador por componente, sin cadenas A->B->C.\n//\n// Ganador (regla 3): fecha_carga mas reciente; si empata, mas campos ORIGINALES\n// completos; si empata, primero del archivo (id_fila menor). Reproducible.\n//\n// ADOPCION DE TIPO: el ganador adopta el telefono_tipo mas especifico presente\n// en su MISMA linea (mismo telefono_match), precedencia celular > fijo > ambiguo.\n// Si el ganador vino 'ambiguo' pero otro de su linea era 'celular', queda\n// 'celular'. El telefono original queda intacto: el tipo por-fila de F01 siempre\n// se puede recomputar.\n\nconst ORIG = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga'];\nconst PREC = { celular: 3, fijo: 2, ambiguo: 1, invalido: 0, '': 0 };\n\nfunction matchTel(norm) {\n  const d = String(norm === undefined || norm === null ? '' : norm).replace(/\\D/g, '');\n  return d.length >= 10 ? d.slice(-10) : '';\n}\n\nconst filas = items.map((item, i) => {\n  const json = Object.assign({}, item.json);\n  json.telefono_match = matchTel(json.telefono_norm);\n  return { json: json, i: i, id_fila: i + 1 };\n});\n\n// --- union-find ---\nconst padre = filas.map((_, i) => i);\nfunction find(x) { while (padre[x] !== x) { padre[x] = padre[padre[x]]; x = padre[x]; } return x; }\nfunction unir(a, b) { const ra = find(a), rb = find(b); if (ra !== rb) padre[ra] = rb; }\n\nfunction agrupar(campo) {\n  const m = new Map();\n  filas.forEach((f) => {\n    const v = String(f.json[campo] === undefined || f.json[campo] === null ? '' : f.json[campo]).trim();\n    if (v === '') return;                 // vacio no agrupa\n    if (!m.has(v)) m.set(v, []);\n    m.get(v).push(f.i);\n  });\n  m.forEach((idxs) => { for (let k = 1; k < idxs.length; k++) unir(idxs[0], idxs[k]); });\n}\nagrupar('cuil_norm');\nagrupar('telefono_match');\n\n// --- componentes ---\nconst comp = new Map();\nfilas.forEach((f) => { const r = find(f.i); if (!comp.has(r)) comp.set(r, []); comp.get(r).push(f.i); });\n\nfunction completo(json) {\n  return ORIG.reduce((n, c) => n + (String(json[c] === undefined || json[c] === null ? '' : json[c]).trim() !== '' ? 1 : 0), 0);\n}\n\nfunction ganador(idxs) {\n  return idxs.reduce((best, i) => {\n    const a = filas[i].json, b = filas[best].json;\n    const fa = String(a.fecha_carga || ''), fb = String(b.fecha_carga || '');\n    if (fa !== fb) return fa > fb ? i : best;          // ISO YYYY-MM-DD: lexicografico = cronologico\n    const ca = completo(a), cb = completo(b);\n    if (ca !== cb) return ca > cb ? i : best;\n    return filas[i].id_fila < filas[best].id_fila ? i : best;\n  }, idxs[0]);\n}\n\n// --- marcar (sin reordenar: el orden original tiene que sobrevivir) ---\nconst salida = filas.map((f) => ({\n  json: Object.assign({}, f.json, {\n    id_fila: f.id_fila, es_duplicado: false, duplicado_de: '', motivo_duplicado: '',\n  }),\n}));\n\ncomp.forEach((idxs) => {\n  if (idxs.length < 2) return;\n  const g = ganador(idxs);\n  const idGanador = filas[g].id_fila;\n  const cuilG = String(filas[g].json.cuil_norm || '').trim();\n  const matchG = String(filas[g].json.telefono_match || '').trim();\n\n  // ADOPCION de tipo: el mas especifico en la misma linea del ganador.\n  if (matchG !== '') {\n    let mejor = filas[g].json.telefono_tipo || '';\n    idxs.forEach((i) => {\n      if (String(filas[i].json.telefono_match || '').trim() !== matchG) return;\n      const t = filas[i].json.telefono_tipo || '';\n      if ((PREC[t] || 0) > (PREC[mejor] || 0)) mejor = t;\n    });\n    salida[g].json.telefono_tipo = mejor;\n  }\n\n  idxs.forEach((i) => {\n    if (i === g) return;\n    const motivos = [];\n    if (cuilG !== '' && String(filas[i].json.cuil_norm || '').trim() === cuilG) motivos.push('cuil');\n    if (matchG !== '' && String(filas[i].json.telefono_match || '').trim() === matchG) motivos.push('telefono');\n    salida[i].json.es_duplicado = true;\n    salida[i].json.duplicado_de = idGanador;\n    salida[i].json.motivo_duplicado = motivos.length ? motivos.join('+') : 'transitivo';\n  });\n});\n\nreturn salida;\n"
+      },
+      "id": "n6-dedup",
+      "name": "Marcar duplicados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F04 - Completitud y cobertura.\n//\n// Marca contactos no llamables por dato y contactos fuera de la zona de\n// cobertura. Cada marca deja un MOTIVO en castellano legible (lo lee un\n// supervisor de call center, no un dev). Un contacto acumula TODOS sus motivos.\n//\n// CONFIG es el PARAMETRO del workflow: el unico lugar donde se cambia la zona.\n// La zona de hoy es un ESCENARIO DE DEMO, no un cliente real (ver ESTADO). El\n// proximo cliente cambia esta lista y NO se toca la logica de abajo.\n\nconst CONFIG = {\n  // Localidades EN ZONA (cobertura). Se comparan normalizadas: sin tildes,\n  // minusculas, sin espacios de mas. 'Moron', 'moron' y 'MORON' son la misma.\n  zona: [\n    'Castelar', 'Haedo', 'Moron', 'Hurlingham', 'Ituzaingo', 'Ramos Mejia',\n    'Villa Luzuriaga', 'San Justo',\n  ],\n};\n\nfunction normLoc(s) {\n  return String(s === undefined || s === null ? '' : s)\n    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')   // saca tildes/diacriticos\n    .toLowerCase().trim().replace(/\\s+/g, ' ');\n}\n\nconst zonaSet = new Set(CONFIG.zona.map(normLoc));\n\nreturn items.map((item) => {\n  const json = Object.assign({}, item.json);\n  const motivos = [];\n\n  // Datos insuficientes (hecho del archivo).\n  if (json.telefono_tipo === 'invalido') motivos.push('sin teléfono utilizable');\n  const nombre = String(json.nombre === undefined || json.nombre === null ? '' : json.nombre).trim();\n  if (nombre === '') motivos.push('sin nombre');\n\n  // Fuera de cobertura (suposicion nuestra: la zona). Separado a proposito.\n  const enZona = zonaSet.has(normLoc(json.localidad));\n  if (!enZona) motivos.push('fuera de zona de cobertura');\n\n  json.en_zona = enZona;\n  json.marcado = motivos.length > 0;\n  json.motivo_descarte = motivos.join('; ');\n  return { json: json };\n});\n"
+      },
+      "id": "n7-cobertura",
+      "name": "Completitud y cobertura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F05 - Antiguedad del lead.\n//\n// Deriva dias_antiguedad, frescura, motivo_frescura, fecha_corte_usada.\n//\n// CONFIG.fecha_corte: si viene vacio, se usa la fecha del dia (new Date() SOLO\n// para fijar el default en CONFIG, NUNCA dentro de la logica de calculo). La\n// fecha efectiva se escribe en fecha_corte_usada para que el CSV sea auditable\n// sin saber que dia se genero.\n//\n// Formatos aceptados para fecha_carga:\n//   aaaa-mm-dd   (ISO)\n//   dd/mm/aaaa   (dia primero, Argentina)\n// Se marca 'fecha ambigua' cuando ambos componentes del dd/mm son <= 12 (la\n// lectura inversa tambien seria fecha valida). No se adivinan meses en texto ni\n// anos de 2 digitos: todo lo demas es 'fecha ilegible'.\n//\n// Tramos:\n//   0 a 15 dias  -> alta\n//   16 a 45 dias -> media\n//   46 a 90 dias -> baja\n//   mas de 90    -> fria\n//   no parseable / futuro -> sin dato\n//\n// Todas las fechas se construyen con Date.UTC para evitar un bug de DST:\n// new Date(y, m-1, d) usa hora local, y si el tramo cruza un cambio de horario\n// (en otra zona; Argentina no tiene DST desde 2009) Math.floor pierde una hora\n// y un contacto salta de tramo. Date.UTC elimina el problema.\n//\n// dias_antiguedad: el numero real de dias (puede ser negativo para fechas\n// futuras). Vacio si la fecha no se puede parsear (nunca -1: un -1 seria \"mas\n// fresco que 0 dias\" para cualquier aritmetica aguas abajo).\n//\n// Funcion pura.\n\nconst CONFIG = {\n  fecha_corte: '2026-07-28',\n};\n\nconst _corte_str = CONFIG.fecha_corte || new Date().toISOString().slice(0, 10);\n\nfunction parseFechaUTC(s) {\n  const t = String(s === undefined || s === null ? '' : s).trim();\n  if (t === '') return { fecha: null, motivos: ['fecha vacia'] };\n\n  let y, m, d;\n  let ambigua = false;\n\n  const iso = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(t);\n  if (iso) {\n    y = Number(iso[1]); m = Number(iso[2]); d = Number(iso[3]);\n  } else {\n    const dmy = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(t);\n    if (dmy) {\n      d = Number(dmy[1]); m = Number(dmy[2]); y = Number(dmy[3]);\n      if (d <= 12 && m <= 12) ambigua = true;\n    } else {\n      return { fecha: null, motivos: ['fecha ilegible'] };\n    }\n  }\n\n  const dt = new Date(Date.UTC(y, m - 1, d));\n  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) {\n    return { fecha: null, motivos: ['fecha ilegible'] };\n  }\n\n  const motivos = [];\n  if (ambigua) motivos.push('fecha ambigua');\n  return { fecha: dt, motivos: motivos };\n}\n\nconst _corteR = parseFechaUTC(_corte_str);\nif (!_corteR.fecha) throw new Error('CONFIG.fecha_corte invalida: ' + _corte_str);\nconst corte = _corteR.fecha;\n\nfunction tramo(dias) {\n  if (dias <= 15) return 'alta';\n  if (dias <= 45) return 'media';\n  if (dias <= 90) return 'baja';\n  return 'fria';\n}\n\nreturn items.map((item) => {\n  const json = Object.assign({}, item.json);\n  const r = parseFechaUTC(json.fecha_carga);\n\n  json.fecha_corte_usada = _corte_str;\n\n  if (r.fecha === null) {\n    json.dias_antiguedad = '';\n    json.frescura = 'sin dato';\n    json.motivo_frescura = r.motivos.join('; ');\n  } else {\n    const diff = Math.floor((corte - r.fecha) / 86400000);\n    json.dias_antiguedad = diff;\n\n    const motivos = r.motivos.slice();\n    if (diff < 0) {\n      motivos.push('fecha futura');\n      json.frescura = 'sin dato';\n    } else {\n      json.frescura = tramo(diff);\n    }\n    json.motivo_frescura = motivos.join('; ');\n  }\n\n  return { json: json };\n});\n"
+      },
+      "id": "n8-antiguedad",
+      "name": "Antiguedad del lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F06 - Puntaje explicable.\n//\n// Asigna puntaje, prioridad y motivo a cada contacto. Cada regla deja su\n// contribucion en el motivo; sumar los puntos del motivo da exactamente el\n// puntaje. Es la prueba de que el score se puede auditar.\n//\n// Descartes directos: telefono invalido, fuera de zona, duplicado.\n// Fuerzan prioridad = descartado independientemente del puntaje numerico.\n//\n// CONFIG es el unico lugar donde viven los pesos y umbrales. Cambiar la\n// estrategia comercial no requiere tocar la logica de abajo.\n// Funcion pura.\n\nconst CONFIG = {\n  pesos: {\n    telefono: { celular: 30, fijo: 10, ambiguo: 18 },\n    cuil: { valido: 15, invalido: -10 },\n    zona: 20,\n    frescura: { alta: 25, media: 15, baja: 5, fria: 0, 'sin dato': 0 },\n    origen: {\n      referido: 15,\n      'formulario web': 10,\n      evento: 10,\n      'campaña Meta': 5,\n      'base propia': 0,\n    },\n  },\n  umbrales: { alta: 70, media: 40 },\n};\n\nfunction fmt(n) {\n  return n >= 0 ? '+' + n : String(n);\n}\n\nfunction toBool(v) {\n  if (typeof v === 'boolean') return v;\n  return String(v === undefined || v === null ? '' : v).trim().toUpperCase() === 'TRUE';\n}\n\nreturn items.map((item) => {\n  const json = Object.assign({}, item.json);\n  let score = 0;\n  const partes = [];\n  let descarte = false;\n\n  // 1. Telefono\n  const tipo = String(json.telefono_tipo || '').trim();\n  if (CONFIG.pesos.telefono.hasOwnProperty(tipo)) {\n    const pts = CONFIG.pesos.telefono[tipo];\n    score += pts;\n    partes.push(tipo + ' ' + fmt(pts));\n  } else {\n    partes.push('sin teléfono ' + fmt(0) + ' \\u2192 descarte');\n    descarte = true;\n  }\n\n  // 2. CUIL\n  if (toBool(json.cuil_valido)) {\n    score += CONFIG.pesos.cuil.valido;\n    partes.push('cuil válido ' + fmt(CONFIG.pesos.cuil.valido));\n  } else {\n    score += CONFIG.pesos.cuil.invalido;\n    partes.push('cuil inválido ' + fmt(CONFIG.pesos.cuil.invalido));\n  }\n\n  // 3. Zona\n  if (toBool(json.en_zona)) {\n    score += CONFIG.pesos.zona;\n    partes.push('en zona ' + fmt(CONFIG.pesos.zona));\n  } else {\n    partes.push('fuera de zona ' + fmt(0) + ' \\u2192 descarte');\n    descarte = true;\n  }\n\n  // 4. Frescura\n  const fr = String(json.frescura || 'sin dato').trim();\n  const fr_pts = CONFIG.pesos.frescura.hasOwnProperty(fr) ? CONFIG.pesos.frescura[fr] : 0;\n  score += fr_pts;\n  partes.push('frescura ' + fr + ' ' + fmt(fr_pts));\n\n  // 5. Origen\n  const orig = String(json.origen || '').trim();\n  const orig_pts = CONFIG.pesos.origen.hasOwnProperty(orig) ? CONFIG.pesos.origen[orig] : 0;\n  score += orig_pts;\n  partes.push((orig || 'origen desconocido') + ' ' + fmt(orig_pts));\n\n  // 6. Duplicado\n  if (toBool(json.es_duplicado)) {\n    partes.push('duplicado ' + fmt(0) + ' \\u2192 descarte');\n    descarte = true;\n  }\n\n  // Prioridad\n  let prioridad;\n  if (descarte) prioridad = 'descartado';\n  else if (score >= CONFIG.umbrales.alta) prioridad = 'alta';\n  else if (score >= CONFIG.umbrales.media) prioridad = 'media';\n  else prioridad = 'descartado';\n\n  json.puntaje = score;\n  json.prioridad = prioridad;\n  json.motivo = partes.join('; ');\n  return { json: json };\n});\n"
+      },
+      "id": "n9-puntaje",
+      "name": "Puntaje explicable",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F07 - Ordenamiento.\n// Clave de 4 partes: bloque prioridad (alta > media > descartado), puntaje\n// descendente, dias_antiguedad ascendente (vacios al final), id_fila.\n// El sort de V8 (Node 18+) es estable; id_fila garantiza determinismo total.\n\nconst PRIORIDAD_ORDEN = { alta: 0, media: 1, descartado: 2 };\n\nitems.sort((a, b) => {\n  const ja = a.json, jb = b.json;\n\n  const pa = PRIORIDAD_ORDEN[ja.prioridad] !== undefined ? PRIORIDAD_ORDEN[ja.prioridad] : 2;\n  const pb = PRIORIDAD_ORDEN[jb.prioridad] !== undefined ? PRIORIDAD_ORDEN[jb.prioridad] : 2;\n  if (pa !== pb) return pa - pb;\n\n  const sa = Number(ja.puntaje);\n  const sb = Number(jb.puntaje);\n  if (sa !== sb) return sb - sa;\n\n  const daRaw = ja.dias_antiguedad;\n  const dbRaw = jb.dias_antiguedad;\n  const da = (daRaw === '' || daRaw === undefined || daRaw === null) ? Infinity : Number(daRaw);\n  const db = (dbRaw === '' || dbRaw === undefined || dbRaw === null) ? Infinity : Number(dbRaw);\n  if (da !== db) return da - db;\n\n  return Number(ja.id_fila) - Number(jb.id_fila);\n});\n\nreturn items;\n"
+      },
+      "id": "nA-ordenar",
+      "name": "Ordenar por prioridad y puntaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F07 - Genera CSV comercial con BOM UTF-8.\n// 9 columnas: 6 originales + puntaje, prioridad, motivo.\n// Genera el CSV a mano para controlar BOM y line endings (\\n, no CRLF).\n\nconst COLS = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga',\n              'puntaje', 'prioridad', 'motivo'];\n\nfunction esc(v) {\n  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';\n  const s = String(v === undefined || v === null ? '' : v);\n  if (s.indexOf(',') >= 0 || s.indexOf('\"') >= 0 || s.indexOf('\\n') >= 0 || s.indexOf('\\r') >= 0) {\n    return '\"' + s.replace(/\"/g, '\"\"') + '\"';\n  }\n  return s;\n}\n\nconst header = COLS.map(esc).join(',');\nconst filas = items.map(item => COLS.map(col => esc(item.json[col])).join(','));\nconst csv = '\\uFEFF' + header + '\\n' + filas.join('\\n') + '\\n';\nconst buf = Buffer.from(csv, 'utf-8');\n\nreturn [{\n  json: {},\n  binary: {\n    data: {\n      data: buf.toString('base64'),\n      mimeType: 'text/csv',\n      fileName: 'comercial.csv',\n    }\n  }\n}];\n"
+      },
+      "id": "nB-comercial",
+      "name": "CSV comercial",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\salidas\\salida_comercial.csv",
+        "options": {}
+      },
+      "id": "nW0-escribir-comercial",
+      "name": "Escribir CSV comercial",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        2400,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F07 - Genera CSV de auditoria con BOM UTF-8.\n// Las 26 columnas del pipeline en orden natural.\n\nconst COLS = [\n  'nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga',\n  'telefono_norm', 'telefono_tipo',\n  'cuil_norm', 'cuil_valido', 'cuil_dudoso',\n  'telefono_match', 'id_fila', 'es_duplicado', 'duplicado_de', 'motivo_duplicado',\n  'en_zona', 'marcado', 'motivo_descarte',\n  'fecha_corte_usada', 'dias_antiguedad', 'frescura', 'motivo_frescura',\n  'puntaje', 'prioridad', 'motivo',\n];\n\nfunction esc(v) {\n  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';\n  const s = String(v === undefined || v === null ? '' : v);\n  if (s.indexOf(',') >= 0 || s.indexOf('\"') >= 0 || s.indexOf('\\n') >= 0 || s.indexOf('\\r') >= 0) {\n    return '\"' + s.replace(/\"/g, '\"\"') + '\"';\n  }\n  return s;\n}\n\nconst header = COLS.map(esc).join(',');\nconst filas = items.map(item => COLS.map(col => esc(item.json[col])).join(','));\nconst csv = '\\uFEFF' + header + '\\n' + filas.join('\\n') + '\\n';\nconst buf = Buffer.from(csv, 'utf-8');\n\nreturn [{\n  json: {},\n  binary: {\n    data: {\n      data: buf.toString('base64'),\n      mimeType: 'text/csv',\n      fileName: 'auditoria.csv',\n    }\n  }\n}];\n"
+      },
+      "id": "nC-auditoria",
+      "name": "CSV auditoría",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\salidas\\salida_auditoria.csv",
+        "options": {}
+      },
+      "id": "nW1-escribir-auditoria",
+      "name": "Escribir CSV auditoría",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        2400,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F08 - Reporte de impacto.\n// Calcula metricas de la lista procesada y genera un informe en Markdown.\n// CONFIG tiene los supuestos; cambiar aca, no abajo.\n//\n// costo_hora_operador = 0 -> el reporte dice \"a definir con el cliente\".\n// Si no los sabe, se pregunta al cliente en la reunion: esa pregunta ya es\n// parte del pitch.\n\nconst CONFIG = {\n  minutos_por_llamada: 4,\n  costo_hora_operador: 0,\n};\n\nconst total = items.length;\nlet alta = 0, media = 0, descartado = 0;\nlet sin_tel = 0, fuera_zona = 0, dup = 0, por_score = 0;\n\nfor (const item of items) {\n  const pri = String(item.json.prioridad || '');\n  const motivo = String(item.json.motivo || '');\n\n  if (pri === 'alta') alta++;\n  else if (pri === 'media') media++;\n  else descartado++;\n\n  if (pri === 'descartado') {\n    if (motivo.indexOf('sin tel\\u00e9fono') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) sin_tel++;\n    if (motivo.indexOf('fuera de zona') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) fuera_zona++;\n    if (motivo.indexOf('duplicado') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) dup++;\n    if (motivo.indexOf('\\u2192 descarte') < 0) por_score++;\n  }\n}\n\nconst unicos = total - dup;\nconst llamables = alta + media;\nconst horas = (descartado * CONFIG.minutos_por_llamada / 60).toFixed(1);\nconst fecha_corte = String(items[0].json.fecha_corte_usada || '');\n\nlet md = '';\nmd += '# Reporte de impacto \\u2014 Limpieza de lista de contactos\\n\\n';\n\nmd += '| | |\\n';\nmd += '|---|---|\\n';\nmd += '| Fecha de corte | ' + fecha_corte + ' |\\n';\nmd += '| Contactos procesados | ' + total + ' |\\n\\n';\n\nmd += '## Resumen\\n\\n';\nmd += '| M\\u00e9trica | Cantidad |\\n';\nmd += '|---------|----------|\\n';\nmd += '| Contactos en el archivo | ' + total + ' |\\n';\nmd += '| Contactos \\u00fanicos (sin duplicados) | ' + unicos + ' |\\n';\nmd += '| **Contactos llamables** (alta + media) | **' + llamables + '** |\\n';\nmd += '| Contactos descartados | ' + descartado + ' |\\n\\n';\n\nmd += '## Contactos llamables\\n\\n';\nmd += '| Prioridad | Cantidad | % del total |\\n';\nmd += '|-----------|----------|-------------|\\n';\nmd += '| Alta | ' + alta + ' | ' + (alta * 100 / total).toFixed(1) + '% |\\n';\nmd += '| Media | ' + media + ' | ' + (media * 100 / total).toFixed(1) + '% |\\n\\n';\n\nmd += '## Motivos de descarte\\n\\n';\nmd += '### Por calidad de dato (hechos del archivo)\\n\\n';\nmd += '| Motivo | Contactos |\\n';\nmd += '|--------|-----------|\\n';\nmd += '| Sin tel\\u00e9fono utilizable | ' + sin_tel + ' |\\n';\nmd += '| Duplicado | ' + dup + ' |\\n';\nif (por_score > 0) {\n  md += '| Puntaje bajo (< 40) sin descarte directo | ' + por_score + ' |\\n';\n}\nmd += '\\n';\n\nmd += '### Por zona de cobertura (supuesto nuestro, no del archivo)\\n\\n';\nmd += '| Motivo | Contactos |\\n';\nmd += '|--------|-----------|\\n';\nmd += '| Fuera de zona de cobertura | ' + fuera_zona + ' |\\n\\n';\n\nmd += '*Un contacto puede tener m\\u00e1s de un motivo. La suma de motivos supera el total de descartados.*\\n\\n';\n\nmd += '## Ahorro estimado\\n\\n';\nmd += '| Concepto | Valor |\\n';\nmd += '|----------|-------|\\n';\nconst horas_bajo = (descartado * 2 / 60).toFixed(1);\nconst horas_alto = (descartado * 5 / 60).toFixed(1);\n\nmd += '| Llamadas evitadas | ' + descartado + ' |\\n';\nmd += '| Tiempo por llamada *(supuesto)* | ' + CONFIG.minutos_por_llamada + ' min |\\n';\nmd += '| **Horas de operador ahorradas** | **' + horas + ' h** |\\n';\nmd += '| Sensibilidad (2 a 5 min/llamada) | ' + horas_bajo + ' h a ' + horas_alto + ' h |\\n';\n\nif (CONFIG.costo_hora_operador > 0) {\n  const ahorro = Math.round(descartado * CONFIG.minutos_por_llamada / 60 * CONFIG.costo_hora_operador);\n  md += '| Costo hora operador *(supuesto)* | $' + CONFIG.costo_hora_operador + ' |\\n';\n  md += '| **Ahorro estimado** | **$' + ahorro + '** |\\n';\n} else {\n  md += '| Costo hora operador | *a definir con el cliente* |\\n';\n}\n\nmd += '\\n';\nmd += '*Los supuestos se calibran con cada cliente. Pregunte: \\u201c\\u00bfCu\\u00e1nto tarda una llamada promedio, incluyendo los intentos que no conectan?\\u201d*\\n';\n\nconst buf = Buffer.from(md, 'utf-8');\n\nreturn [{\n  json: {},\n  binary: {\n    data: {\n      data: buf.toString('base64'),\n      mimeType: 'text/markdown',\n      fileName: 'reporte.md',\n    }\n  }\n}];\n"
+      },
+      "id": "nG-reporte",
+      "name": "Reporte de impacto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\salidas\\reporte.md",
+        "options": {}
+      },
+      "id": "nW2-escribir-reporte",
+      "name": "Escribir Reporte de impacto",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        2400,
+        600
+      ]
+    }
+  ],
+  "connections": {
+    "Ejecutar manualmente": {
+      "main": [
+        [
+          {
+            "node": "Leer CSV de disco",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer CSV de disco": {
+      "main": [
+        [
+          {
+            "node": "CSV a items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CSV a items": {
+      "main": [
+        [
+          {
+            "node": "Pasamanos (todo string)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pasamanos (todo string)": {
+      "main": [
+        [
+          {
+            "node": "Normalizar telefono",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar telefono": {
+      "main": [
+        [
+          {
+            "node": "Validar CUIL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar CUIL": {
+      "main": [
+        [
+          {
+            "node": "Marcar duplicados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar duplicados": {
+      "main": [
+        [
+          {
+            "node": "Completitud y cobertura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Completitud y cobertura": {
+      "main": [
+        [
+          {
+            "node": "Antiguedad del lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Antiguedad del lead": {
+      "main": [
+        [
+          {
+            "node": "Puntaje explicable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Puntaje explicable": {
+      "main": [
+        [
+          {
+            "node": "Ordenar por prioridad y puntaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ordenar por prioridad y puntaje": {
+      "main": [
+        [
+          {
+            "node": "CSV comercial",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "CSV auditoría",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reporte de impacto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CSV comercial": {
+      "main": [
+        [
+          {
+            "node": "Escribir CSV comercial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CSV auditoría": {
+      "main": [
+        [
+          {
+            "node": "Escribir CSV auditoría",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reporte de impacto": {
+      "main": [
+        [
+          {
+            "node": "Escribir Reporte de impacto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

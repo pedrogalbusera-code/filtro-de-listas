@@ -1,0 +1,26 @@
+<section class="proj">
+    <span class="tagline">04 · Automatización de procesos para call centers</span>
+    <h2>Filtro de Listas</h2>
+    <div class="meta">Workflow de limpieza y priorización de listas de contactos · n8n, JavaScript, Python · Julio 2026</div>
+
+    <div class="nums">
+      <div class="n"><div class="v">200</div><div class="l">contactos procesados</div></div>
+      <div class="n"><div class="v">86</div><div class="l">llamables de 200</div></div>
+      <div class="n"><div class="v">114</div><div class="l">descartados con motivo</div></div>
+      <div class="n"><div class="v">7,6 h</div><div class="l">de operador ahorradas</div></div>
+    </div>
+
+    <div class="lb">La situación</div>
+    <p>Los call centers del rubro reciben listas de contactos y las llaman de arriba a abajo: duplicados, teléfonos inválidos, gente fuera de zona. Antes de marcar un número ya perdieron tiempo en contactos que nunca iban a conectar.</p>
+
+    <div class="lb">Lo que encontré</div>
+    <ul>
+      <li>De 200 contactos de prueba, 82 no tenían teléfono utilizable, 14 estaban duplicados y 39 estaban fuera de la zona de cobertura. Solo 86 valían la pena.</li>
+      <li>El validador de CUIL que construí daba 200 de 200 válidos. Al contrastarlo con la regla de AFIP descubrí que estaba calibrado contra el generador del archivo, no contra la realidad. La corrección bajó los typos no detectados de 1,58% a 0%. 19 CUILs pasaron a inválidos porque el archivo estaba mal generado.</li>
+      <li>La suite de regresión daba 9/9 verde, pero 5 de los 9 verificadores no ejecutaban el pipeline: leían archivos de corridas anteriores. Se rompió a propósito una regla y siguió en verde. Se corrigió y se probó de verdad.</li>
+    </ul>
+
+    <div class="lb">Qué construí</div>
+    <p>Un workflow de n8n con 10 nodos encadenados que normaliza teléfonos, valida CUILs (módulo 11), deduplica por CUIL y teléfono, marca zona y antigüedad, asigna un puntaje explicable por fila y genera un reporte de impacto. 9 verificadores en Python, comparación contra golden files por SHA-256, y 9 pendientes conocidos registrados con su comportamiento medido. Tres archivos adversarios escritos para romper el pipeline encontraron 13 hallazgos documentados.</p>
+    <a class="repo" href="https://github.com/pedrogalbusera-code/filtro-de-listas">Ver el repositorio &rarr;</a>
+  </section>

@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-07-30
+Última actualización: 2026-07-31
 
 | Fase | Título                          | Estado    | Verificador |
 |------|---------------------------------|-----------|-------------|
@@ -14,12 +14,26 @@
 | F07  | Salida ordenada                 | **CERRADA** | v07: 23/23 PASA |
 | F08  | El número (reporte de impacto)  | **CERRADA** | v08: 31/31 PASA |
 | F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA + 9 pendientes OK |
-| F10  | Empaquetado y portfolio         | **SIGUIENTE** | —           |
+| F10  | Empaquetado y portfolio         | **CERRADA (pendiente repo GitHub)** | correr_todo: 10/10 PASA, n8n limpio OK, SHA-256 golden OK |
 
 ## Decisiones pendientes de Pedro
 
-- **Supuesto de tiempo por llamada (F08):** minutos promedio por llamada y
-  costo horario del operador, para convertir descartes en horas y en plata.
+- **Repo público en GitHub.** El portfolio linkea a
+  `https://github.com/pedrogalbusera-code/filtro-de-listas`, que no existe.
+  F10 no está cerrada al 100% hasta que el repo exista. Comando para crear
+  el remote y hacer push (después de crear el repo vacío en GitHub):
+  ```
+  git remote add origin https://github.com/pedrogalbusera-code/filtro-de-listas.git
+  git branch -M main
+  git push -u origin main
+  ```
+
+- **Supuesto de tiempo por llamada (F08):** el valor actual es **4 min/llamada**,
+  hardcodeado en `herramientas/gen_workflow.py` (línea 669). `prompts/F08.md`
+  decía 3 min y mencionaba un `config/supuestos.json` que nunca se creó. No
+  hay registro en git de cuándo cambió de 3 a 4 (el primer commit ya tiene 4).
+  El reporte ahora incluye banda de sensibilidad (2 a 5 min → 3,8 h a 9,5 h).
+  Costo horario del operador: sigue en 0, "a definir con el cliente".
 
 ## Decisiones tomadas
 
@@ -262,6 +276,37 @@ en su propia fase cuando se decida construirla.
 ---
 
 ## Bitácora
+
+**2026-07-31 — F10 cerrada (revisión CIERRE-F10).** Entregables: `workflows/etapa1-final.json`,
+`README.md`, `portfolio-entry.html`, `guion-de-venta.md`. Suite 10/10 PASA (623s).
+SHA-256 idénticos al golden: com=`9a6884603f91...` aud=`ae6fcc5f146d...`.
+
+Criterio 1 (n8n limpio) ejecutado: `N8N_USER_FOLDER` apuntado a carpeta vacía,
+importado solo `etapa1-final.json`, ejecutado con `--id=f08reporte00001`. Los dos
+SHA-256 coinciden con el golden. El workflow no depende de nada fuera del JSON.
+
+Hallazgos de la revisión:
+
+1. **Link al repo inexistente.** `portfolio-entry.html` linkea a
+   `github.com/pedrogalbusera-code/filtro-de-listas` que no existe. Pendiente
+   hasta que Pedro cree el repo y haga push. Comando anotado arriba.
+2. **Supuesto de minutos cambió de 3 a 4 sin registro.** `prompts/F08.md`
+   decía 3 min y `config/supuestos.json`; el código tiene 4 min hardcodeado en
+   `gen_workflow.py`. No hay commit previo con 3 — cambió antes del primer
+   commit. Anotado en decisiones pendientes. Se agregó banda de sensibilidad
+   al reporte (2 a 5 min → 3,8 h a 9,5 h).
+3. **ID del workflow en el README.** El README decía `--id=etapa1final0001`
+   pero el JSON tiene `f08reporte00001`. Corregido.
+4. **Documentos comerciales excluidos del repo.** `guion-de-venta.md` y
+   `CATALOGO-FILTROS.md` agregados al `.gitignore` (modelo de cobro, estrategia
+   comercial). El README menciona que quedan fuera a propósito.
+5. **`salidas/reporte.md` agregado al `.gitignore`.** Era generado pero no
+   matcheaba el patrón existente (`reporte_*.md`).
+6. **`motivo_frescura` vacío en las 200 filas.** La frescura sí puntúa
+   (aparece en `motivo`), pero `motivo_frescura` tiene 0/200 con valor.
+   Es una columna muerta, no un bug de lógica. Pendiente cosmético.
+7. **Finales de línea (CRLF).** El problema reportado (12 archivos data/workflows
+   con 2464 líneas cambiadas puro CRLF) ya no existe en el árbol actual.
 
 **2026-07-30 — Pendientes conocidos integrados a la suite.** 9 hallazgos del
 archivo adversario 1 registrados en `verificadores/pendientes_conocidos.py`,

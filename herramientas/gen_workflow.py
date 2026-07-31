@@ -738,9 +738,13 @@ md += '*Un contacto puede tener m\\u00e1s de un motivo. La suma de motivos super
 md += '## Ahorro estimado\\n\\n';
 md += '| Concepto | Valor |\\n';
 md += '|----------|-------|\\n';
+const horas_bajo = (descartado * 2 / 60).toFixed(1);
+const horas_alto = (descartado * 5 / 60).toFixed(1);
+
 md += '| Llamadas evitadas | ' + descartado + ' |\\n';
 md += '| Tiempo por llamada *(supuesto)* | ' + CONFIG.minutos_por_llamada + ' min |\\n';
 md += '| **Horas de operador ahorradas** | **' + horas + ' h** |\\n';
+md += '| Sensibilidad (2 a 5 min/llamada) | ' + horas_bajo + ' h a ' + horas_alto + ' h |\\n';
 
 if (CONFIG.costo_hora_operador > 0) {
   const ahorro = Math.round(descartado * CONFIG.minutos_por_llamada / 60 * CONFIG.costo_hora_operador);
