@@ -5,7 +5,7 @@
 | Fase | Título                          | Estado    | Verificador |
 |------|---------------------------------|-----------|-------------|
 | F00  | Entorno y workflow pasamanos    | **CERRADA** | v00: 10/10 PASA |
-| F01  | Normalización de teléfono       | **CERRADA** | v01: 25/25 PASA |
+| F01  | Normalización de teléfono       | **CERRADA (corregida 2026-07-31)** | v01: 42/42 PASA |
 | F02  | Validación de CUIL              | **CERRADA** | v02: 22/22 PASA (regla corregida) |
 | F03  | Deduplicación                   | **CERRADA** | v03: 29/29 PASA |
 | F04  | Completitud y cobertura         | **CERRADA** | v04: 18/18 PASA |
@@ -13,7 +13,7 @@
 | F06  | Puntaje explicable              | **CERRADA** | v06: 24/24 PASA |
 | F07  | Salida ordenada                 | **CERRADA** | v07: 23/23 PASA |
 | F08  | El número (reporte de impacto)  | **CERRADA** | v08: 31/31 PASA |
-| F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA + 9 pendientes OK |
+| F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA + 3 pendientes OK |
 | F10  | Empaquetado y portfolio         | **CERRADA (pendiente repo GitHub)** | correr_todo: 10/10 PASA, n8n limpio OK, SHA-256 golden OK |
 
 ## Decisiones pendientes de Pedro
@@ -249,15 +249,15 @@ escrito. Ahí no obtiene nada: ordena lo que el cliente ya tiene.
 
 | #  | Id  | Categoría | Estado | Detalle |
 |----|-----|-----------|--------|---------|
-| 1  | T01 | teléfono  | **registrado** | Fijo internacional (`+54 11 …`) → invalido. Falso inválido. |
-| 2  | T02 | teléfono  | **registrado** | Celular con espacio (`+54 9 11 …`) → invalido. El más grave. |
-| 3  | T03 | teléfono  | **registrado** | Internacional sin `+` (`549 …`) → invalido. |
-| 4  | T04 | teléfono  | **registrado** | Formato viejo con 15 (`011 15 …`) → invalido. |
-| 5  | T05 | teléfono  | **registrado** | `15-…` sin área → ambiguo con norm incorrecta. Peligroso. |
-| 6  | T10 | teléfono  | **registrado** | Dos teléfonos en una celda → invalido. |
+| 1  | T01 | teléfono  | **corregido** | Fijo internacional (`+54 11 …`) → ahora fijo. CORRECCION-F01. |
+| 2  | T02 | teléfono  | **corregido** | Celular con espacio (`+54 9 11 …`) → ahora celular. CORRECCION-F01. |
+| 3  | T03 | teléfono  | **corregido** | Internacional sin `+` (`549 …`) → ahora celular. CORRECCION-F01. |
+| 4  | T04 | teléfono  | **corregido** | Formato viejo con 15 (`011 15 …`) → ahora celular. CORRECCION-F01. |
+| 5  | T05 | teléfono  | **corregido** | `15-…` sin área → ahora invalido (antes ambiguo con norm incorrecta). CORRECCION-F01. |
+| 6  | T10 | teléfono  | **corregido** | Dos teléfonos en una celda → ahora toma el primero. CORRECCION-F01. |
 | 7  | T19 | localidad | **registrado** | `Morón (Buenos Aires)` → fuera de zona. Comparación literal. |
 | 8  | T21 | localidad | **registrado** | Localidad vacía → fuera de zona. Indistinguible de "vive lejos". |
-| 9  | T31 | dedup     | **registrado** | Perdedor con tel válido: se pierde. No transfiere al ganador. |
+| 9  | T31 | dedup     | **registrado** | Perdedor con tel válido: se pierde. No transfiere al ganador. Dedup cambió de CUIL directo a transitivo (consecuencia de CORRECCION-F01). |
 | 10 | T08 | cosmético | no incluido | `.0` de Excel → invalido correcto, sin motivo específico. |
 | 11 | T09 | cosmético | no incluido | Notación científica → invalido correcto, sin aviso de archivo dañado. |
 | 12 | —   | archivo 2 | **F11** | Basura arriba del header → crash (NodeOperationError). |
@@ -276,6 +276,38 @@ en su propia fase cuando se decida construirla.
 ---
 
 ## Bitácora
+
+**2026-07-31 — CORRECCIÓN F01: formatos de teléfono argentinos.** Se amplió
+`normalizarTelefono` en `gen_workflow.py` (JS_F01) para reconocer 7 formatos
+nuevos. v01 subió de 25 a 42 checks, todos PASA.
+
+Formatos agregados:
+- `+54 XX XXXX-XXXX` (fijo internacional sin el 9) → fijo
+- `+54 9 XX XXXX XXXX` (celular con espacios entre +54 y 9) → celular
+- `549 XX XXXX XXXX` (internacional sin `+`) → celular
+- `0XX 15 XXXX-XXXX` (formato viejo con 15, área 2-4 díg) → celular
+- `15-XXXX-XXXX` (15 sin código de área) → invalido (no se puede resolver)
+- `XXXX.0` / notación científica → invalido (artefactos de Excel)
+- `XXXXXXXXXX / XXXXXXXXXX` (dos teléfonos separados por `/`) → toma el primero
+
+Arreglo de T05: antes `15-4161-7956` daba `ambiguo` con norm `+541541617956`
+(un número inventado, llamable y equivocado). Ahora da `invalido`. Es el
+cambio más importante porque corrige un falso positivo peligroso.
+
+**Por qué el golden no se movió:** los formatos nuevos (T01-T10) no están en
+`data/leads_prueba_SINTETICO_1.csv` — ese archivo solo tiene `011-…`, `+549…`
+y 10 dígitos pelados. SHA-256 comercial y auditoría idénticos al golden de F09.
+
+Consecuencia aguas abajo en el adversario: T31 (dedup) cambió de
+`duplicado_de=26, motivo=cuil` a `duplicado_de=28, motivo=transitivo`. T01
+ahora tiene teléfono fijo válido (`+541141617956`), lo que activa el match por
+teléfono y cambia la cadena de dedup. v03 (29/29 PASA) no se vio afectado
+porque es sobre el CSV limpio.
+
+Pendientes conocidos: de 9 bajaron a 3 (T19, T21, T31). Los 6 de teléfono se
+sacaron de `pendientes_conocidos.py` porque ahora dan el resultado correcto.
+
+Suite: 10/10 PASA (870s), golden SHA-256 intacto, pendientes 3/3 OK.
 
 **2026-07-31 — F10 cerrada (revisión CIERRE-F10).** Entregables: `workflows/etapa1-final.json`,
 `README.md`, `portfolio-entry.html`, `guion-de-venta.md`. Suite 10/10 PASA (623s).

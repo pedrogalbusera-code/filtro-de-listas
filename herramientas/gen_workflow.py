@@ -74,18 +74,63 @@ JS_F01 = """// F01 - Normalizacion de telefono.
 
 function normalizarTelefono(raw) {
   const s = (raw === undefined || raw === null) ? '' : String(raw).trim();
-  const digitos = s.replace(/\\D/g, '');
 
-  // Texto ("sin dato" / "sindato") o sin ningun digito -> invalido.
-  if (digitos.length === 0 || /[a-zA-Z]/.test(s)) {
+  // Notacion cientifica (dano de Excel) -> invalido. Va antes del filtro de
+  // letras porque la E del exponente dispararia esa regla.
+  if (/^\\d+\\.\\d+[eE]\\+\\d+$/.test(s)) {
     return { telefono_norm: '', telefono_tipo: 'invalido' };
   }
 
-  // Celular: unico formato movil presente, prefijo internacional con el 9.
-  if (s.startsWith('+549')) {
-    const nac = digitos.slice(3); // saca el '549' de adelante
+  // Texto ("sin dato" / "sindato" / "N/D") -> invalido.
+  if (/[a-zA-Z]/.test(s)) {
+    return { telefono_norm: '', telefono_tipo: 'invalido' };
+  }
+
+  // Dos telefonos separados por '/': se toma el primero.
+  let input = s;
+  if (s.indexOf('/') >= 0) {
+    input = s.split('/')[0].trim();
+  }
+
+  // Sacar espacios internos antes de clasificar (causa raiz de T01-T04).
+  const limpio = input.replace(/\\s+/g, '');
+  const digitos = limpio.replace(/\\D/g, '');
+
+  if (digitos.length === 0) {
+    return { telefono_norm: '', telefono_tipo: 'invalido' };
+  }
+
+  // +549... -> celular (el 9 puede estar pegado o separado por espacios).
+  if (limpio.startsWith('+549')) {
+    const nac = digitos.slice(3);
     if (nac.length === 10) return { telefono_norm: '+549' + nac, telefono_tipo: 'celular' };
     return { telefono_norm: '', telefono_tipo: 'invalido' };
+  }
+
+  // +54 sin 9 -> fijo (formato internacional sin indicador de celular).
+  if (limpio.startsWith('+54')) {
+    const nac = digitos.slice(2);
+    if (nac.length === 10) return { telefono_norm: '+54' + nac, telefono_tipo: 'fijo' };
+    return { telefono_norm: '', telefono_tipo: 'invalido' };
+  }
+
+  // 549... sin el '+' -> celular (13 digitos).
+  if (digitos.startsWith('549') && digitos.length === 13) {
+    const nac = digitos.slice(3);
+    return { telefono_norm: '+549' + nac, telefono_tipo: 'celular' };
+  }
+
+  // 0XX 15 XXXX-XXXX -> celular (formato viejo argentino con 15).
+  // Estructura: 0 + area(2-4 dig) + 15 + abonado(8 dig) = 13-15 digitos.
+  if (digitos[0] === '0' && digitos.length >= 13 && digitos.length <= 15) {
+    for (let areaLen = 2; areaLen <= 4; areaLen++) {
+      const area = digitos.slice(1, 1 + areaLen);
+      const resto = digitos.slice(1 + areaLen);
+      if (resto.startsWith('15') && resto.length === 10) {
+        const abonado = resto.slice(2);
+        return { telefono_norm: '+549' + area + abonado, telefono_tipo: 'celular' };
+      }
+    }
   }
 
   // Fijo: 11 digitos con 0 inicial (011-... o 011... sin guion). Nacional = sin el 0.
@@ -93,8 +138,13 @@ function normalizarTelefono(raw) {
     return { telefono_norm: '+54' + digitos.slice(1), telefono_tipo: 'fijo' };
   }
 
+  // 15-XXXX-XXXX sin codigo de area -> invalido. No se adivina el area.
+  if (digitos.startsWith('15') && digitos.length === 10) {
+    return { telefono_norm: '', telefono_tipo: 'invalido' };
+  }
+
   // Ambiguo: exactamente 10 digitos sin prefijo. Puede ser fijo o celular.
-  if (digitos.length === 10 && !s.startsWith('+')) {
+  if (digitos.length === 10 && !limpio.startsWith('+')) {
     return { telefono_norm: '+54' + digitos, telefono_tipo: 'ambiguo' };
   }
 

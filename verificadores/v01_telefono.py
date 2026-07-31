@@ -53,21 +53,65 @@ def esperado(raw):
     coinciden en las 200 filas reales es la garantia. Si divergen, salta aca.
     """
     s = "" if raw is None else str(raw).strip()
-    digitos = re.sub(r"\D", "", s)
 
-    if len(digitos) == 0 or re.search(r"[a-zA-Z]", s):
+    # Notacion cientifica (dano de Excel)
+    if re.match(r"^\d+\.\d+[eE]\+\d+$", s):
         return ("", "invalido")
 
-    if s.startswith("+549"):
+    # Texto
+    if re.search(r"[a-zA-Z]", s):
+        return ("", "invalido")
+
+    # Dos telefonos separados por '/'
+    inp = s
+    if "/" in s:
+        inp = s.split("/")[0].strip()
+
+    # Sacar espacios internos antes de clasificar
+    limpio = re.sub(r"\s+", "", inp)
+    digitos = re.sub(r"\D", "", limpio)
+
+    if len(digitos) == 0:
+        return ("", "invalido")
+
+    # +549... -> celular
+    if limpio.startswith("+549"):
         nac = digitos[3:]
         if len(nac) == 10:
             return ("+549" + nac, "celular")
         return ("", "invalido")
 
+    # +54 sin 9 -> fijo
+    if limpio.startswith("+54"):
+        nac = digitos[2:]
+        if len(nac) == 10:
+            return ("+54" + nac, "fijo")
+        return ("", "invalido")
+
+    # 549... sin + -> celular
+    if digitos.startswith("549") and len(digitos) == 13:
+        nac = digitos[3:]
+        return ("+549" + nac, "celular")
+
+    # 0XX 15 XXXX-XXXX -> celular (formato viejo con 15)
+    if digitos and digitos[0] == "0" and 13 <= len(digitos) <= 15:
+        for area_len in range(2, 5):
+            area = digitos[1:1 + area_len]
+            resto = digitos[1 + area_len:]
+            if resto.startswith("15") and len(resto) == 10:
+                abonado = resto[2:]
+                return ("+549" + area + abonado, "celular")
+
+    # Fijo: 11 digitos con 0 inicial
     if len(digitos) == 11 and digitos[0] == "0":
         return ("+54" + digitos[1:], "fijo")
 
-    if len(digitos) == 10 and not s.startswith("+"):
+    # 15 sin codigo de area -> invalido
+    if digitos.startswith("15") and len(digitos) == 10:
+        return ("", "invalido")
+
+    # Ambiguo: 10 digitos sin prefijo
+    if len(digitos) == 10 and not limpio.startswith("+"):
         return ("+54" + digitos, "ambiguo")
 
     return ("", "invalido")
@@ -247,6 +291,45 @@ def main():
         "la normalizacion es determinista (mismo input -> mismo output)",
         all(esperado(f["telefono"]) == esperado(f["telefono"]) for f in filas_out),
     )
+
+    # --- CORRECCION-F01: formatos nuevos, verificados por celda ---
+    CASOS_F01 = [
+        ("T01", "+54 11 4161-7956",           "fijo",     "+541141617956"),
+        ("T02", "+54 9 11 4161 7956",          "celular",  "+5491141617956"),
+        ("T03", "549 11 4161 7956",            "celular",  "+5491141617956"),
+        ("T04", "011 15 4161-7956",            "celular",  "+5491141617956"),
+        ("T05", "15-4161-7956",                "invalido", ""),
+        ("T06", "4161-7956",                   "invalido", ""),
+        ("T07", "(011) 4161-7956",             "fijo",     "+541141617956"),
+        ("T08", "1141617956.0",                "invalido", ""),
+        ("T09", "1.14162E+09",                 "invalido", ""),
+        ("T10", "1141617956 / 1165385561",     "ambiguo",  "+541141617956"),
+    ]
+    for tag, entrada, tipo_e, norm_e in CASOS_F01:
+        norm_r, tipo_r = esperado(entrada)
+        check(
+            f"{tag} {entrada!r} -> {tipo_e}",
+            tipo_r == tipo_e and norm_r == norm_e,
+            f"oraculo=({norm_r!r},{tipo_r})",
+        )
+
+    # Casos que ya funcionaban y no se tocan.
+    NO_TOCAR = [
+        ("T11", "  1155551111  ",              "ambiguo",  "+541155551111"),
+        ("T12", "+549 11 5555-1111",           "celular",  "+5491155551111"),
+        ("T13", "011-45551111",                "fijo",     "+541145551111"),
+        ("T14", "1145551111",                  "ambiguo",  "+541145551111"),
+        ("T44", "sin  dato",                   "invalido", ""),
+        ("T45", "N/D",                         "invalido", ""),
+        ("T46", "0",                           "invalido", ""),
+    ]
+    for tag, entrada, tipo_e, norm_e in NO_TOCAR:
+        norm_r, tipo_r = esperado(entrada)
+        check(
+            f"{tag} {entrada!r} -> {tipo_e} (no tocar)",
+            tipo_r == tipo_e and norm_r == norm_e,
+            f"oraculo=({norm_r!r},{tipo_r})",
+        )
 
     return reportar()
 
