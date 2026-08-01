@@ -1,0 +1,17 @@
+{
+  "_comentario": [
+    "Mapeo de columnas del cliente 'adversario 2' (data/leads_adversario_2.csv)",
+    "a los seis nombres canonicos. Direccion: columna del archivo -> canonica.",
+    "La clave se compara normalizada (minusculas, sin tildes, espacios",
+    "colapsados), asi que 'Nombre y Apellido' y 'nombre y apellido' son la misma.",
+    "'Documento -> cuil' es una decision de ESTE cliente (sus documentos son",
+    "CUILs); por eso va aca y no en sinonimos.json.",
+    "'Observaciones' no se mapea: queda como columna extra en la auditoria."
+  ],
+  "Nombre y Apellido": "nombre",
+  "Documento": "cuil",
+  "Celular": "telefono",
+  "Zona": "localidad",
+  "Origen del lead": "origen",
+  "Fecha de alta": "fecha_carga"
+}

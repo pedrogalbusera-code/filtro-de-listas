@@ -1,0 +1,17 @@
+{
+  "_comentario": [
+    "Tabla general de sinonimos para el mapeo automatico de columnas (F11).",
+    "La comparacion es EXACTA sobre el nombre normalizado (minusculas, sin",
+    "tildes, espacios colapsados). No hay matching por parecido ni por",
+    "posicion: si el nombre de una columna no esta aca, se resuelve con un",
+    "config/mapeo_<cliente>.json o la corrida se frena.",
+    "'documento' NO es sinonimo de cuil a proposito: un 'Documento' puede ser",
+    "un DNI, y decidir que es un CUIL es una decision por cliente, no general."
+  ],
+  "nombre": ["nombre", "nombre y apellido", "apellido y nombre", "nombre completo", "contacto"],
+  "cuil": ["cuil", "cuit", "cuil/cuit", "nro de cuil", "numero de cuil"],
+  "telefono": ["telefono", "tel", "telefono celular", "celular", "movil", "nro de telefono", "numero de telefono", "telefono de contacto"],
+  "localidad": ["localidad", "ciudad", "partido", "zona", "barrio"],
+  "origen": ["origen", "origen del lead", "fuente", "canal"],
+  "fecha_carga": ["fecha_carga", "fecha de carga", "fecha de alta", "fecha alta", "fecha de ingreso", "fecha"]
+}

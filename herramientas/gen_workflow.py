@@ -45,6 +45,16 @@ return items.map((item) => {
     const v = item.json[col];
     fila[col] = (v === undefined || v === null) ? '' : String(v);
   }
+  // F11: la puerta de entrada puede agregar columnas del archivo del cliente
+  // (extra_*) y advertencias de lectura (advertencia_entrada). Se dejan pasar
+  // hasta la auditoria. Con el CSV canonico estas claves no existen, asi que
+  // este bloque no cambia ni un byte de la salida de F00-F08 (golden intacto).
+  // Lo interno de la puerta (_ficha, _rechazo) NO pasa: muere aca.
+  for (const [k, v] of Object.entries(item.json)) {
+    if (k.indexOf('extra_') === 0 || k === 'advertencia_entrada') {
+      fila[k] = (v === undefined || v === null) ? '' : String(v);
+    }
+  }
   return { json: fila };
 });
 """
@@ -822,6 +832,554 @@ return [{
 """
 
 
+JS_F11_PUERTA = """// F11 - Puerta de entrada (modo __MODO__).
+//
+// Todo F00-F10 supone que el archivo es NUESTRO CSV: coma, UTF-8, seis
+// columnas conocidas, encabezado en la fila 1. Este nodo se ocupa del archivo
+// de un CLIENTE: o lo entiende, o lo rechaza con un error que se entiende.
+// Lo unico prohibido es procesarlo mal en silencio (hallazgo 13: el CSV con
+// ';' salio con cara de correcto y las 5 filas vacias).
+//
+// REGLA DE ORO: ante la duda, frenar fuerte. No se adivina un separador, no
+// se mapea una columna por parecido, no se rellena un dato.
+//
+// El rechazo NO se lanza aca: se marca en _rechazo y lo lanza el nodo Reja,
+// DESPUES de que la rama de la ficha escribio su archivo. Un rechazo sin
+// ficha no explica nada.
+//
+// SINONIMOS y MAPEO vienen de config/sinonimos.json y config/mapeo_*.json,
+// embebidos al GENERAR el workflow. Cambiar de cliente = otro JSON en config/
+// y regenerar; nunca editar JavaScript.
+
+const ARCHIVO = __ARCHIVO_JSON__;
+const MODO = '__MODO__';
+const SINONIMOS = __SINONIMOS_JSON__;
+const MAPEO = __MAPEO_JSON__;
+
+const CANONICAS = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga'];
+
+function normNombre(s) {
+  return String(s === undefined || s === null ? '' : s)
+    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+    .toLowerCase().trim().replace(/\\s+/g, ' ');
+}
+
+// Cantidad de campos de una linea, fuera de comillas. Para DETECTAR el
+// separador; el parseo real es parsearCSV, abajo.
+function contarCampos(linea, sep) {
+  let n = 1, enComillas = false;
+  for (let i = 0; i < linea.length; i++) {
+    const ch = linea[i];
+    if (ch === '"') enComillas = !enComillas;
+    else if (ch === sep && !enComillas) n++;
+  }
+  return n;
+}
+
+// Parser CSV RFC4180: campos entrecomillados con separadores, comillas
+// escapadas ("") y saltos de linea adentro. Devuelve registros (arrays).
+function parsearCSV(texto, sep) {
+  const registros = [];
+  let campo = '', registro = [], enComillas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const ch = texto[i];
+    if (enComillas) {
+      if (ch === '"') {
+        if (texto[i + 1] === '"') { campo += '"'; i++; }
+        else enComillas = false;
+      } else campo += ch;
+    } else if (ch === '"' && campo === '') {
+      enComillas = true;
+    } else if (ch === sep) {
+      registro.push(campo); campo = '';
+    } else if (ch === '\\n' || ch === '\\r') {
+      if (ch === '\\r' && texto[i + 1] === '\\n') i++;
+      registro.push(campo); campo = '';
+      registros.push(registro); registro = [];
+    } else {
+      campo += ch;
+    }
+  }
+  if (campo !== '' || registro.length) { registro.push(campo); registros.push(registro); }
+  return registros;
+}
+
+const meta = {
+  archivo: ARCHIVO,
+  tam: null,
+  formato: MODO === 'texto' ? 'CSV / texto plano' : 'planilla (xlsx)',
+  separador: MODO === 'texto' ? '' : 'n/a (planilla)',
+  encoding: MODO === 'texto' ? '' : 'n/a (planilla)',
+  encabezadoLinea: null,
+  salteadas: [],
+  columnas: [],
+  mapeo: [],
+  extras: [],
+  faltantes: [],
+  filasLeidas: 0,
+  filasVaciasIgnoradas: 0,
+  filasTodoVacio: 0,
+  filasIncompletas: [],
+  advertencias: [],
+  origenes: null,
+  estado: 'ACEPTADO',
+  motivoRechazo: '',
+};
+
+function armarFicha(m) {
+  const L = [];
+  L.push('# Ficha de entrada \\u2014 ' + m.archivo.split(/[\\\\/]/).pop());
+  L.push('');
+  L.push('Generada por el workflow ANTES de confiar en la corrida. Todos los');
+  L.push('numeros salen del archivo de origen, no de la salida.');
+  L.push('');
+  L.push('| Campo | Valor |');
+  L.push('|-------|-------|');
+  L.push('| Estado | **' + m.estado + '** |');
+  if (m.motivoRechazo) L.push('| Motivo del rechazo | ' + m.motivoRechazo.replace(/\\|/g, '\\\\|') + ' |');
+  L.push('| Archivo | ' + m.archivo + ' |');
+  L.push('| Tama\\u00f1o | ' + (m.tam === null ? 'n/d' : m.tam + ' bytes') + ' |');
+  L.push('| Formato | ' + m.formato + ' |');
+  L.push('| Separador detectado | ' + (m.separador || 'n/d') + ' |');
+  L.push('| Encoding | ' + (m.encoding || 'n/d') + ' |');
+  L.push('| Encabezado en la linea | ' + (m.encabezadoLinea === null ? 'n/d' : m.encabezadoLinea) + ' |');
+  L.push('| Lineas salteadas arriba del encabezado | ' + m.salteadas.length + ' |');
+  L.push('| Filas de datos leidas | ' + m.filasLeidas + ' |');
+  L.push('| Filas vacias ignoradas | ' + m.filasVaciasIgnoradas + ' |');
+  L.push('| Filas con los 6 campos canonicos vacios | ' + m.filasTodoVacio + ' |');
+  L.push('');
+  if (m.salteadas.length) {
+    L.push('## Lineas salteadas (basura arriba del encabezado)');
+    L.push('');
+    m.salteadas.forEach((s) => L.push('- linea ' + s.linea + ': ' + (s.contenido || '(vacia)')));
+    L.push('');
+  }
+  L.push('## Columnas encontradas');
+  L.push('');
+  m.columnas.forEach((c) => L.push('- ' + (c === '' ? '(sin nombre)' : c)));
+  L.push('');
+  if (m.mapeo.length) {
+    L.push('## Mapeo aplicado');
+    L.push('');
+    L.push('| Columna del archivo | Canonica | Como se resolvio |');
+    L.push('|---------------------|----------|------------------|');
+    m.mapeo.forEach((mm) => L.push('| ' + mm.orig + ' | ' + mm.canonica + ' | ' + mm.fuente + ' |'));
+    L.push('');
+  }
+  if (m.faltantes.length) {
+    L.push('## Columnas canonicas SIN RESOLVER');
+    L.push('');
+    m.faltantes.forEach((c) => L.push('- ' + c));
+    L.push('');
+  }
+  if (m.extras.length) {
+    L.push('## Columnas extra (se conservan en la auditoria, no puntuan)');
+    L.push('');
+    m.extras.forEach((c) => L.push('- ' + c));
+    L.push('');
+  }
+  if (m.filasIncompletas.length) {
+    L.push('## Filas incompletas (los campos que faltan quedan vacios)');
+    L.push('');
+    m.filasIncompletas.forEach((f) => L.push('- ' + f));
+    L.push('');
+  }
+  if (m.advertencias.length) {
+    L.push('## Advertencias');
+    L.push('');
+    m.advertencias.forEach((a) => L.push('- ' + a));
+    L.push('');
+  }
+  if (m.origenes) {
+    L.push('## Valores distintos de `origen`');
+    L.push('');
+    L.push('Se listan como vienen; NO se normalizan (eso es otra fase). Si estas');
+    L.push('etiquetas no coinciden con las que puntua F06, el puntaje de origen da 0.');
+    L.push('');
+    L.push('| Valor | Filas |');
+    L.push('|-------|-------|');
+    Object.keys(m.origenes).sort().forEach((k) => {
+      L.push('| ' + (k === '' ? '(vacio)' : k) + ' | ' + m.origenes[k] + ' |');
+    });
+    L.push('');
+  }
+  return L.join('\\n') + '\\n';
+}
+
+function frenar(detectado, esperado) {
+  const e = new Error(
+    'F11 RECHAZO \\u2014 archivo: ' + ARCHIVO +
+    ' \\u2014 detectado: ' + detectado +
+    ' \\u2014 esperado: ' + esperado
+  );
+  e._esRechazo = true;
+  throw e;
+}
+
+try {
+  let encabezados = null;   // nombres originales de columna
+  let filasDatos = null;    // array de objetos { encabezado: valor }
+
+  if (MODO === 'texto') {
+    // En n8n 2.x el Code node corre en un task runner: el binario NO viaja
+    // como base64 dentro de items[].binary (ahi queda una referencia), se
+    // pide con helpers.getBinaryDataBuffer. El fallback a items[].binary
+    // existe para poder probar esta logica fuera de n8n (Node pelado).
+    let buf = null;
+    if (typeof helpers !== 'undefined' && helpers && helpers.getBinaryDataBuffer) {
+      buf = await helpers.getBinaryDataBuffer(0, 'data');
+    } else if (items[0].binary && items[0].binary.data && items[0].binary.data.data) {
+      buf = Buffer.from(items[0].binary.data.data, 'base64');
+    }
+    if (!buf || !buf.length) throw new Error('F11: no llego el archivo binario al nodo Puerta');
+    meta.tam = buf.length;
+
+    const conBOM = buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF;
+    const cuerpo = conBOM ? buf.slice(3) : buf;
+    let texto = cuerpo.toString('utf8');
+    if (texto.indexOf('\\uFFFD') >= 0) {
+      // No era UTF-8 valido. Latin-1 mapea todos los bytes: no pierde nada.
+      texto = cuerpo.toString('latin1');
+      meta.encoding = 'Latin-1 (no era UTF-8 valido)';
+      meta.advertencias.push('el archivo no es UTF-8; se leyo como Latin-1 (revisar tildes en la salida)');
+    } else {
+      meta.encoding = conBOM ? 'UTF-8 con BOM' : 'UTF-8 sin BOM';
+    }
+
+    // --- Deteccion de separador ---
+    // Regla de la fase: gana el que produce la MISMA cantidad de campos (>=2)
+    // en al menos el 80% de las primeras 10 lineas no vacias. Refinamientos
+    // (documentados en ESTADO.md):
+    //   - una linea con 1 solo campo no vota (no contiene el separador: es
+    //     titulo/basura, no evidencia en contra) -> el 80% se exige sobre las
+    //     lineas con >=2 campos;
+    //   - pero la moda tiene que aparecer en >=50% del TOTAL de las lineas
+    //     muestreadas, para que un ';' perdido dentro de una celda no gane
+    //     con una sola linea;
+    //   - dos separadores igual de consistentes = ambiguo = rechazo.
+    const lineas = texto.split(/\\r\\n|\\r|\\n/);
+    const muestra = lineas.filter((l) => l.trim() !== '').slice(0, 10);
+    if (muestra.length === 0) frenar('archivo vacio (0 lineas con contenido)', 'un archivo con encabezado y datos');
+
+    const SEPS = [[',', 'coma'], [';', 'punto y coma'], ['\\t', 'tabulador']];
+    const aptos = [];
+    for (const par of SEPS) {
+      const sep = par[0], nombreSep = par[1];
+      const counts = muestra.map((l) => contarCampos(l, sep));
+      const multi = counts.filter((c) => c >= 2);
+      if (!multi.length) continue;
+      const frec = new Map();
+      multi.forEach((c) => frec.set(c, (frec.get(c) || 0) + 1));
+      let moda = 0, fmax = 0;
+      frec.forEach((f, c) => { if (f > fmax) { fmax = f; moda = c; } });
+      const soporteMulti = fmax / multi.length;
+      const soporteTotal = counts.filter((c) => c === moda).length / counts.length;
+      if (soporteMulti >= 0.8 && soporteTotal >= 0.5) {
+        aptos.push({ sep: sep, nombreSep: nombreSep, moda: moda, soporteTotal: soporteTotal });
+      }
+    }
+    if (aptos.length === 0) {
+      frenar(
+        'ningun separador (coma, punto y coma, tabulador) produce una cantidad estable de columnas (>=2) sobre las primeras ' + muestra.length + ' lineas no vacias',
+        'una tabla con separador consistente; esto no parece una tabla'
+      );
+    }
+    aptos.sort((a, b) => b.soporteTotal - a.soporteTotal);
+    if (aptos.length > 1 && aptos[0].soporteTotal === aptos[1].soporteTotal) {
+      frenar(
+        'dos separadores igual de consistentes: ' + aptos[0].nombreSep + ' y ' + aptos[1].nombreSep,
+        'un unico separador dominante; no se adivina'
+      );
+    }
+    const sep = aptos[0].sep;
+    meta.separador = aptos[0].nombreSep;
+
+    // --- Parseo completo + encabezado ---
+    const registros = parsearCSV(texto, sep);
+    const esVacio = (r) => r.every((c) => String(c).trim() === '');
+
+    const frecCols = new Map();
+    registros.forEach((r) => {
+      if (esVacio(r) || r.length < 2) return;
+      frecCols.set(r.length, (frecCols.get(r.length) || 0) + 1);
+    });
+    let modaCols = 0, fcmax = 0;
+    frecCols.forEach((f, c) => { if (f > fcmax) { fcmax = f; modaCols = c; } });
+    if (modaCols < 2) {
+      frenar('una sola columna en un archivo de ' + registros.length + ' lineas', 'al menos 2 columnas');
+    }
+
+    // El encabezado es la primera linea cuya cantidad de campos coincide con
+    // la de la mayoria. Lo de arriba se saltea y se REPORTA, no muere mudo.
+    const headerIdx = registros.findIndex((r) => !esVacio(r) && r.length === modaCols);
+    meta.encabezadoLinea = headerIdx + 1;
+    for (let i = 0; i < headerIdx; i++) {
+      const r = registros[i];
+      meta.salteadas.push({
+        linea: i + 1,
+        contenido: esVacio(r) ? '' : r.join(sep === '\\t' ? ' ' : sep).slice(0, 80),
+      });
+    }
+    encabezados = registros[headerIdx].map((c) => String(c).trim());
+
+    filasDatos = [];
+    for (let i = headerIdx + 1; i < registros.length; i++) {
+      const r = registros[i];
+      if (esVacio(r)) { meta.filasVaciasIgnoradas++; continue; }
+      let campos = r.slice();
+      if (campos.length > encabezados.length) {
+        const sobra = campos.slice(encabezados.length);
+        if (sobra.every((c) => String(c).trim() === '')) {
+          campos = campos.slice(0, encabezados.length);
+          meta.advertencias.push('linea ' + (i + 1) + ': campos vacios de mas al final, recortados');
+        } else {
+          frenar(
+            'la linea ' + (i + 1) + ' tiene ' + campos.length + ' campos con contenido y el encabezado tiene ' + encabezados.length,
+            'filas con a lo sumo tantos campos como el encabezado'
+          );
+        }
+      }
+      if (campos.length < encabezados.length) {
+        meta.filasIncompletas.push(
+          'linea ' + (i + 1) + ': ' + campos.length + ' de ' + encabezados.length + ' campos'
+        );
+        while (campos.length < encabezados.length) campos.push('');
+      }
+      const obj = {};
+      encabezados.forEach((h, j) => { obj[h] = campos[j]; });
+      filasDatos.push(obj);
+    }
+  } else {
+    // Planilla: los items ya vienen de extractFromFile (operation xlsx), que
+    // es la unica pieza que sabe leer el formato. Aca no hay separador ni
+    // encabezado que buscar: la primera fila de la hoja es el encabezado.
+    meta.encabezadoLinea = 1;
+    encabezados = [];
+    const visto = new Set();
+    for (const it of items) {
+      for (const k of Object.keys(it.json)) {
+        if (!visto.has(k)) { visto.add(k); encabezados.push(k); }
+      }
+    }
+    encabezados = encabezados.map((h) => String(h).trim());
+    filasDatos = items.map((it) => it.json);
+  }
+
+  meta.columnas = encabezados.slice();
+
+  // --- Encabezados repetidos: mapeo ambiguo, se frena ---
+  const nrm = encabezados.map(normNombre);
+  for (let i = 0; i < nrm.length; i++) {
+    if (nrm[i] !== '' && nrm.indexOf(nrm[i]) !== i) {
+      frenar("columna repetida en el encabezado: '" + encabezados[i] + "'", 'nombres de columna unicos');
+    }
+  }
+
+  // --- Mapeo: primero el del cliente, despues sinonimos. Nunca por parecido ---
+  const MAPEO_NORM = {};
+  if (MAPEO) {
+    for (const k of Object.keys(MAPEO)) {
+      if (k.indexOf('_') === 0) continue;
+      MAPEO_NORM[normNombre(k)] = MAPEO[k];
+    }
+  }
+  const SIN_NORM = {};
+  for (const canon of Object.keys(SINONIMOS)) {
+    if (canon.indexOf('_') === 0) continue;
+    SINONIMOS[canon].forEach((s) => { SIN_NORM[normNombre(s)] = canon; });
+  }
+
+  const resolucion = {};   // canonica -> { orig, fuente }
+  const usadas = new Set();
+  for (const h of encabezados) {
+    const destino = MAPEO_NORM[normNombre(h)];
+    if (!destino) continue;
+    if (resolucion[destino]) {
+      frenar(
+        "dos columnas ('" + resolucion[destino].orig + "' y '" + h + "') mapean a '" + destino + "'",
+        'una columna por canonica'
+      );
+    }
+    resolucion[destino] = { orig: h, fuente: 'mapeo del cliente' };
+    usadas.add(h);
+  }
+  for (const canon of CANONICAS) {
+    if (resolucion[canon]) continue;
+    const cand = encabezados.filter((h) => !usadas.has(h) && SIN_NORM[normNombre(h)] === canon);
+    if (cand.length > 1) {
+      frenar(
+        "dos columnas ('" + cand.join("', '") + "') coinciden por sinonimos con '" + canon + "'",
+        'una columna por canonica; resolver con config/mapeo_<cliente>.json'
+      );
+    }
+    if (cand.length === 1) {
+      resolucion[canon] = {
+        orig: cand[0],
+        fuente: normNombre(cand[0]) === canon ? 'nombre canonico' : 'sinonimos',
+      };
+      usadas.add(cand[0]);
+    }
+  }
+
+  meta.faltantes = CANONICAS.filter((c) => !resolucion[c]);
+  if (meta.faltantes.length) {
+    frenar(
+      "columnas canonicas sin resolver: [" + meta.faltantes.join(', ') + "]. Columnas del archivo: [" + encabezados.join(', ') + "]",
+      'resolverlas por config/mapeo_<cliente>.json o config/sinonimos.json; no se adivina por parecido ni por posicion'
+    );
+  }
+  meta.mapeo = CANONICAS.map((c) => ({ canonica: c, orig: resolucion[c].orig, fuente: resolucion[c].fuente }));
+  meta.extras = encabezados.filter((h) => !usadas.has(h) && normNombre(h) !== '');
+
+  // --- Construir filas canonicas ---
+  const filasOut = [];
+  for (let i = 0; i < filasDatos.length; i++) {
+    const fila = filasDatos[i];
+    const out = {};
+    const adv = [];
+    for (const canon of CANONICAS) {
+      let v = fila[resolucion[canon].orig];
+      if (typeof v === 'number') {
+        // Celda numerica de planilla. Para el telefono es la trampa clasica
+        // de Excel: si habia un 0 inicial (011-...), ya se perdio y no hay
+        // forma de saberlo. Un telefono asi no es confiable: se serializa
+        // con el artefacto visible (.0) para que F01 lo marque invalido,
+        // y el motivo queda en advertencia_entrada y en la ficha.
+        if (canon === 'telefono') {
+          adv.push('telefono llego como numero de planilla (posible perdida del 0 inicial): artefacto de Excel');
+          v = v.toFixed(1);
+        } else {
+          adv.push(canon + ' llego como numero de planilla');
+          v = String(v);
+        }
+      }
+      out[canon] = (v === undefined || v === null) ? '' : String(v);
+    }
+    for (const h of meta.extras) {
+      const v = fila[h];
+      out['extra_' + h] = (v === undefined || v === null) ? '' : String(v);
+    }
+    if (CANONICAS.every((c) => out[c].trim() === '')) meta.filasTodoVacio++;
+    if (adv.length) {
+      out.advertencia_entrada = adv.join('; ');
+      meta.advertencias.push('fila ' + (i + 1) + ' de datos: ' + adv.join('; '));
+    }
+    filasOut.push(out);
+  }
+  meta.filasLeidas = filasOut.length;
+
+  // --- Reja anti-silencio: los checks que habrian atrapado el hallazgo 13 ---
+  if (filasOut.length === 0) {
+    frenar('cero filas de datos despues del encabezado', 'al menos una fila de datos');
+  }
+  if (meta.filasTodoVacio / filasOut.length > 0.5) {
+    frenar(
+      meta.filasTodoVacio + ' de ' + filasOut.length + ' filas con los 6 campos canonicos vacios',
+      'una lista con datos; esto no es una lista mala, es un parseo mal hecho'
+    );
+  }
+
+  const origenes = {};
+  filasOut.forEach((o) => {
+    const k = String(o.origen || '').trim();
+    origenes[k] = (origenes[k] || 0) + 1;
+  });
+  meta.origenes = origenes;
+
+  const salida = filasOut.map((o) => ({ json: o }));
+  salida[0].json._ficha = armarFicha(meta);
+  return salida;
+
+} catch (e) {
+  if (!e._esRechazo) throw e;
+  meta.estado = 'RECHAZADO';
+  meta.motivoRechazo = e.message;
+  return [{ json: { _rechazo: e.message, _ficha: armarFicha(meta) } }];
+}
+"""
+
+
+JS_F11_REJA = """// F11 - Reja. Si la puerta marco rechazo, aca se corta la corrida con una
+// excepcion de n8n (exit code de error, SIN archivo de salida). Esta separado
+// de la puerta para que la rama de la ficha alcance a escribirse ANTES de
+// frenar: un rechazo sin ficha no explica nada.
+if (items.length && items[0].json._rechazo) {
+  throw new Error(items[0].json._rechazo);
+}
+return items;
+"""
+
+
+JS_F11_FICHA = """// F11 - Ficha de entrada. Toma el markdown que armo la puerta y lo convierte
+// en archivo. Se escribe SIEMPRE: tambien (sobre todo) cuando la corrida se
+// rechaza, porque la ficha es lo que se lee antes de apretar correr.
+const md = String((items[0] && items[0].json && items[0].json._ficha) || '');
+if (md === '') throw new Error('F11: la puerta no dejo la ficha de entrada');
+const buf = Buffer.from(md, 'utf-8');
+return [{
+  json: {},
+  binary: {
+    data: {
+      data: buf.toString('base64'),
+      mimeType: 'text/markdown',
+      fileName: 'ficha.md',
+    }
+  }
+}];
+"""
+
+
+JS_F11_AUDIT = """// F11 - CSV de auditoria con columnas extra del cliente.
+// Identico a la auditoria de F07 (mismas 26 columnas, mismo orden, mismo
+// escape) MAS las columnas que la puerta conservo del archivo del cliente
+// (extra_*, advertencia_entrada), al final y ordenadas. Con el CSV canonico
+// no hay extras, asi que la salida es byte a byte la de F07 (golden intacto).
+
+const COLS = [
+  'nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga',
+  'telefono_norm', 'telefono_tipo',
+  'cuil_norm', 'cuil_valido', 'cuil_dudoso',
+  'telefono_match', 'id_fila', 'es_duplicado', 'duplicado_de', 'motivo_duplicado',
+  'en_zona', 'marcado', 'motivo_descarte',
+  'fecha_corte_usada', 'dias_antiguedad', 'frescura', 'motivo_frescura',
+  'puntaje', 'prioridad', 'motivo',
+];
+
+const extras = new Set();
+for (const item of items) {
+  for (const k of Object.keys(item.json)) {
+    if (k.indexOf('extra_') === 0 || k === 'advertencia_entrada') extras.add(k);
+  }
+}
+const cols = COLS.concat(Array.from(extras).sort());
+
+function esc(v) {
+  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+  const s = String(v === undefined || v === null ? '' : v);
+  if (s.indexOf(',') >= 0 || s.indexOf('"') >= 0 || s.indexOf('\\n') >= 0 || s.indexOf('\\r') >= 0) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+const header = cols.map(esc).join(',');
+const filas = items.map(item => cols.map(col => esc(item.json[col])).join(','));
+const csv = '\\uFEFF' + header + '\\n' + filas.join('\\n') + '\\n';
+const buf = Buffer.from(csv, 'utf-8');
+
+return [{
+  json: {},
+  binary: {
+    data: {
+      data: buf.toString('base64'),
+      mimeType: 'text/csv',
+      fileName: 'auditoria.csv',
+    }
+  }
+}];
+"""
+
+
 # ---------------------------------------------------------------------------
 # Nodos fijos de la cadena (iguales en todas las fases).
 # ---------------------------------------------------------------------------
@@ -1001,14 +1559,78 @@ FASES = {
             "reporte": ("nG-reporte", "Reporte de impacto", JS_F08_REPORTE),
         },
     },
+    # F11 - puerta de entrada. Mismo pipeline completo que F08, pero la
+    # cabeza cambia: en vez de extractFromFile con coma fija, la puerta
+    # detecta separador/encabezado, mapea columnas por config y frena fuerte
+    # ante un archivo que no se entiende. La auditoria es la variante F11
+    # (conserva columnas extra del cliente; byte-identica a F07 sin extras).
+    "11": {
+        "id": "f11puerta000001",
+        "name": "10-puerta",
+        "codes": [
+            ("n3-pasamanos", "Pasamanos (todo string)", JS_F00),
+            ("n4-telefono", "Normalizar telefono", JS_F01),
+            ("n5-cuil", "Validar CUIL", JS_F02),
+            ("n6-dedup", "Marcar duplicados", JS_F03),
+            ("n7-cobertura", "Completitud y cobertura", JS_F04),
+            ("n8-antiguedad", "Antiguedad del lead", JS_F05),
+            ("n9-puntaje", "Puntaje explicable", JS_F06),
+            ("nA-ordenar", "Ordenar por prioridad y puntaje", JS_F07_SORT),
+        ],
+        "salida_dual": {
+            "comercial": ("nB-comercial", "CSV comercial", JS_F07_COMERCIAL),
+            "auditoria": ("nC-auditoria", "CSV auditoría (F11)", JS_F11_AUDIT),
+            "reporte": ("nG-reporte", "Reporte de impacto", JS_F08_REPORTE),
+        },
+    },
 }
 
 
+def _js_puerta(path_in, mapeo_path):
+    """Arma el JS de la puerta: embebe modo, ruta, sinonimos y mapeo.
+
+    Los JSON viven en config/ y se embeben al GENERAR. Cambiar de cliente =
+    editar/crear un JSON y regenerar; nunca editar JavaScript.
+    """
+    ext = os.path.splitext(path_in)[1].lower()
+    modo = "planilla" if ext in (".xlsx", ".xls") else "texto"
+
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sin_path = os.path.join(base, "config", "sinonimos.json")
+    with open(sin_path, "r", encoding="utf-8") as fh:
+        sinonimos = json.load(fh)
+
+    mapeo = None
+    if mapeo_path:
+        with open(mapeo_path, "r", encoding="utf-8") as fh:
+            mapeo = json.load(fh)
+        canonicas = {"nombre", "cuil", "telefono", "localidad", "origen", "fecha_carga"}
+        malas = [v for k, v in mapeo.items()
+                 if not k.startswith("_") and v not in canonicas]
+        if malas:
+            raise SystemExit(f"mapeo {mapeo_path}: destinos no canonicos: {malas}")
+
+    js = (JS_F11_PUERTA
+          .replace("__MODO__", modo)
+          .replace("__ARCHIVO_JSON__", json.dumps(path_in))
+          .replace("__SINONIMOS_JSON__", json.dumps(sinonimos, ensure_ascii=False))
+          .replace("__MAPEO_JSON__", json.dumps(mapeo, ensure_ascii=False)))
+    return js, modo
+
+
 def build(path_in, path_out, fase="00", code_type_version=2, convert_type_version=1.1,
-          fecha_corte="", path_out_audit="", path_reporte=""):
+          fecha_corte="", path_out_audit="", path_reporte="", mapeo_path="",
+          ficha_out=""):
     if fase not in FASES:
         raise SystemExit(f"fase desconocida: {fase!r}. Conocidas: {sorted(FASES)}")
     spec = FASES[fase]
+
+    def link(a, b):
+        return {a: {"main": [[{"node": b, "type": "main", "index": 0}]]}}
+
+    if fase == "11":
+        return _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
+                          path_out_audit, path_reporte, mapeo_path, ficha_out, link)
 
     nodos = _nodos_lectura(path_in)
     x = 600
@@ -1016,9 +1638,6 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
         js_final = js.replace("__FECHA_CORTE__", fecha_corte)
         nodos.append(_nodo_code(node_id, name, js_final, x, code_type_version))
         x += 200
-
-    def link(a, b):
-        return {a: {"main": [[{"node": b, "type": "main", "index": 0}]]}}
 
     branch_paths = {"comercial": path_out, "auditoria": path_out_audit, "reporte": path_reporte}
 
@@ -1077,6 +1696,127 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
     }
 
 
+def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
+               path_out_audit, path_reporte, mapeo_path, ficha_out, link):
+    """Cablea el workflow de F11.
+
+    trigger -> leer -> [planilla a items (solo xlsx)] -> puerta
+    puerta -> ficha -> escribir ficha        (rama 1: se escribe SIEMPRE)
+    puerta -> reja -> pasamanos -> ... -> ordenar -> ramas de salida
+    La rama de la ficha va PRIMERO en las conexiones: con executionOrder v1
+    corre antes que la reja, asi el rechazo nunca deja la corrida sin ficha.
+
+    Las ramas de salida se construyen aca de nuevo (no se toca el camino de
+    F07/F08): duplicar 20 lineas es mas barato que arriesgar el golden con
+    un refactor.
+    """
+    js_puerta, modo = _js_puerta(path_in, mapeo_path)
+
+    if not ficha_out:
+        stem = os.path.splitext(os.path.basename(path_in))[0]
+        out_dir = os.path.dirname(path_out) or "."
+        ficha_out = os.path.join(out_dir, f"ficha_entrada_{stem}.md")
+
+    nodos = _nodos_lectura(path_in)[:2]        # trigger + leer, SIN extract csv
+    x = 400
+    if modo == "planilla":
+        nodos.append({
+            "parameters": {"operation": "xlsx", "options": {"headerRow": True}},
+            "id": "n2-planilla",
+            "name": "Planilla a items",
+            "type": "n8n-nodes-base.extractFromFile",
+            "typeVersion": 1,
+            "position": [x, 0],
+        })
+        x += 200
+
+    puerta = _nodo_code("nP-puerta", "Puerta de entrada", js_puerta, x, code_type_version)
+    nodos.append(puerta)
+    x += 200
+
+    ficha_code = _nodo_code("nE-ficha", "Ficha de entrada", JS_F11_FICHA, x, code_type_version)
+    ficha_code["position"] = [x, -300]
+    ficha_write = {
+        "parameters": {"operation": "write", "fileName": ficha_out, "options": {}},
+        "id": "nE-ficha-escribir",
+        "name": "Escribir ficha de entrada",
+        "type": "n8n-nodes-base.readWriteFile",
+        "typeVersion": 1,
+        "position": [x + 200, -300],
+    }
+    reja = _nodo_code("nR-reja", "Reja anti-silencio", JS_F11_REJA, x, code_type_version)
+    nodos += [ficha_code, ficha_write, reja]
+    x += 200
+
+    cadena = [reja]
+    for node_id, name, js in spec["codes"]:
+        js_final = js.replace("__FECHA_CORTE__", fecha_corte)
+        n = _nodo_code(node_id, name, js_final, x, code_type_version)
+        nodos.append(n)
+        cadena.append(n)
+        x += 200
+    sort_node = cadena[-1]
+
+    branch_paths = {"comercial": path_out, "auditoria": path_out_audit, "reporte": path_reporte}
+    sd = spec["salida_dual"]
+    active = [(k, sd[k], branch_paths[k]) for k in sd if branch_paths.get(k)]
+    y_offsets = [-200, 200, 600]
+    branch_nodes = []
+    for i, (key, (b_id, b_name, b_js), b_path) in enumerate(active):
+        y = y_offsets[i] if i < len(y_offsets) else 200 * (i + 2)
+        code_node = _nodo_code(b_id, b_name, b_js, x, code_type_version)
+        code_node["position"] = [x, y]
+        write_node = {
+            "parameters": {"operation": "write", "fileName": b_path, "options": {}},
+            "id": f"nW{i}-escribir-{key}",
+            "name": f"Escribir {b_name}",
+            "type": "n8n-nodes-base.readWriteFile",
+            "typeVersion": 1,
+            "position": [x + 200, y],
+        }
+        nodos += [code_node, write_node]
+        branch_nodes.append((code_node, write_node))
+
+    connections = {}
+    connections.update(link(nodos[0]["name"], nodos[1]["name"]))       # trigger -> leer
+    if modo == "planilla":
+        connections.update(link(nodos[1]["name"], "Planilla a items"))
+        connections.update(link("Planilla a items", puerta["name"]))
+    else:
+        connections.update(link(nodos[1]["name"], puerta["name"]))
+
+    # La ficha PRIMERO (se escribe antes de que la reja pueda frenar).
+    connections[puerta["name"]] = {
+        "main": [[
+            {"node": ficha_code["name"], "type": "main", "index": 0},
+            {"node": reja["name"], "type": "main", "index": 0},
+        ]]
+    }
+    connections.update(link(ficha_code["name"], ficha_write["name"]))
+
+    for a, b in zip(cadena, cadena[1:]):
+        connections.update(link(a["name"], b["name"]))
+
+    connections[sort_node["name"]] = {
+        "main": [[
+            {"node": cn["name"], "type": "main", "index": 0}
+            for cn, _ in branch_nodes
+        ]]
+    }
+    for cn, wn in branch_nodes:
+        connections.update(link(cn["name"], wn["name"]))
+
+    return {
+        "id": spec["id"],
+        "name": spec["name"],
+        "nodes": nodos,
+        "connections": connections,
+        "active": False,
+        "pinData": {},
+        "settings": {"executionOrder": "v1"},
+    }
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("destino")
@@ -1086,6 +1826,10 @@ if __name__ == "__main__":
     ap.add_argument("--fecha-corte", default="")
     ap.add_argument("--csv-out-audit", default="")
     ap.add_argument("--reporte-out", default="")
+    ap.add_argument("--mapeo", default="",
+                    help="F11: config/mapeo_<cliente>.json (opcional)")
+    ap.add_argument("--ficha-out", default="",
+                    help="F11: ruta de la ficha de entrada (default: salidas/ficha_entrada_<archivo>.md)")
     ap.add_argument("--code-tv", type=float, default=2)
     ap.add_argument("--convert-tv", type=float, default=1.1)
     args = ap.parse_args()
@@ -1099,6 +1843,8 @@ if __name__ == "__main__":
         fecha_corte=args.fecha_corte,
         path_out_audit=args.csv_out_audit,
         path_reporte=args.reporte_out,
+        mapeo_path=args.mapeo,
+        ficha_out=args.ficha_out,
     )
     with open(args.destino, "w", encoding="utf-8") as fh:
         json.dump(wf, fh, indent=2, ensure_ascii=False)

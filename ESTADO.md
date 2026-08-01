@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-07-31
+Última actualización: 2026-08-01
 
 | Fase | Título                          | Estado    | Verificador |
 |------|---------------------------------|-----------|-------------|
@@ -14,19 +14,10 @@
 | F07  | Salida ordenada                 | **CERRADA** | v07: 23/23 PASA |
 | F08  | El número (reporte de impacto)  | **CERRADA** | v08: 31/31 PASA |
 | F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA + 3 pendientes OK |
-| F10  | Empaquetado y portfolio         | **CERRADA (pendiente repo GitHub)** | correr_todo: 10/10 PASA, n8n limpio OK, SHA-256 golden OK |
+| F10  | Empaquetado y portfolio         | **CERRADA** | correr_todo: 10/10 PASA, n8n limpio OK, SHA-256 golden OK |
+| F11  | Puerta de entrada               | **CERRADA (commiteada 2026-08-01)** | v11: 70/70 PASA + suite 10/10 + golden intacto |
 
 ## Decisiones pendientes de Pedro
-
-- **Repo público en GitHub.** El portfolio linkea a
-  `https://github.com/pedrogalbusera-code/filtro-de-listas`, que no existe.
-  F10 no está cerrada al 100% hasta que el repo exista. Comando para crear
-  el remote y hacer push (después de crear el repo vacío en GitHub):
-  ```
-  git remote add origin https://github.com/pedrogalbusera-code/filtro-de-listas.git
-  git branch -M main
-  git push -u origin main
-  ```
 
 - **Supuesto de tiempo por llamada (F08):** el valor actual es **4 min/llamada**,
   hardcodeado en `herramientas/gen_workflow.py` (línea 669). `prompts/F08.md`
@@ -37,6 +28,9 @@
 
 ## Decisiones tomadas
 
+- **Repo público en GitHub — RESUELTA (2026-08-01).** El repo
+  `github.com/pedrogalbusera-code/filtro-de-listas` existe, `origin` está
+  configurado por HTTPS y `master` quedó en sync. F10 cerrada al 100%.
 - **Zona de cobertura (F04) — RESUELTA (2026-07-27).**
   - **Dentro (8):** Castelar, Haedo, Morón, Hurlingham, Ituzaingó, Ramos Mejía,
     Villa Luzuriaga, San Justo.
@@ -260,15 +254,15 @@ escrito. Ahí no obtiene nada: ordena lo que el cliente ya tiene.
 | 9  | T31 | dedup     | **registrado** | Perdedor con tel válido: se pierde. No transfiere al ganador. Dedup cambió de CUIL directo a transitivo (consecuencia de CORRECCION-F01). |
 | 10 | T08 | cosmético | no incluido | `.0` de Excel → invalido correcto, sin motivo específico. |
 | 11 | T09 | cosmético | no incluido | Notación científica → invalido correcto, sin aviso de archivo dañado. |
-| 12 | —   | archivo 2 | **F11** | Basura arriba del header → crash (NodeOperationError). |
-| 13 | —   | archivo 3 | **F11** | Separador `;` → 5 filas vacías con cara de correctas. El peor. |
+| 12 | —   | archivo 2 | **corregido** | Basura arriba del header → ahora se saltea y reporta (encabezado detectado en línea 4). F11. |
+| 13 | —   | archivo 3 | **corregido** | Separador `;` → ahora detectado; 5 filas pobladas, 3 en zona, 2 fuera. F11. |
 
 **Registrados (9):** en `verificadores/pendientes_conocidos.py`, verificados por
 `v09_pendientes.py`. La suite los reporta en su propia sección.
 
-**F11 (2):** son trabajo de tolerancia de entrada (mapeo de columnas, detección
-de separador). No son bugs del pipeline, son funcionalidad que no existe. Van
-en su propia fase cuando se decida construirla.
+**Corregidos por F11 (12 y 13):** la puerta de entrada detecta separador y
+encabezado, mapea columnas por config y rechaza fuerte lo que no entiende.
+Verificados por `v11_puerta.py` (48/48).
 
 **No incluidos (2):** cosméticos. El pipeline los clasifica correctamente
 (invalido), pero no avisa del motivo específico (artefacto de Excel).
@@ -276,6 +270,105 @@ en su propia fase cuando se decida construirla.
 ---
 
 ## Bitácora
+
+**2026-08-01 — F11 commiteada y pusheada; hueco T01–T10 cerrado.** F11 había
+corrido 5 archivos por el nodo real de n8n pero nunca `leads_adversario_1.csv`:
+los arreglos de CORRECCION-F01 sobre los formatos T01–T10 estaban verificados
+solo contra el oráculo Python de `v01_telefono.py` — el mismo patrón que el
+hallazgo de F05 (oráculo comparado contra sí mismo), justo en la normalización
+de teléfonos. Se agregó un **sexto caso** a `v11_puerta.py`: corre
+`leads_adversario_1.csv` por el nodo real (import + execute) y verifica por
+**contenido de celda** del CSV de auditoría que T01–T10 dan exactamente la
+tabla de `prompts/CORRECCION-F01.md`, con los esperados transcriptos **a mano**
+desde esa tabla (prohibido sacarlos del oráculo o del pipeline). T05 dio
+`invalido` con norm vacía en el nodo real: el bug del número inventado no está
+vivo. `v11_puerta.py`: **70/70 PASA** (48 anteriores + 22 nuevos: corrida,
+presencia de las 10 filas, y 20 checks de celda). Suite completa después del
+cambio: **10/10 PASA (681s)**, golden intacto (com=`9a6884603f91...`
+aud=`ae6fcc5f146d...`). Los 14 archivos de F11 + el verificador ampliado + la
+ficha de la sexta corrida quedaron commiteados y pusheados arriba de `cbebea8`.
+
+**2026-07-31 — F11 cerrada: puerta de entrada.** El pipeline ahora acepta el
+archivo de un cliente (CSV con cualquier separador, basura arriba del
+encabezado, columnas renombradas, o .xlsx) o lo rechaza con un error que se
+entiende. Nunca procesa basura en silencio. `v11_puerta.py`: **48/48 PASA**
+(5 corridas reales de n8n). Suite completa después del cambio: **10/10 PASA
+(762s)**, golden intacto (com=`9a6884603f91...` aud=`ae6fcc5f146d...`),
+pendientes 3/3 sin cambio. n8n resolvió a 2.32.7 vía npx (antes 2.31.7); cero
+diferencias.
+
+**Qué se construyó** (fase `11` de `gen_workflow.py`, workflow
+`workflows/10-puerta.json`):
+
+- **Puerta de entrada** (nodo Code): decodifica el binario (UTF-8 con/sin BOM,
+  fallback Latin-1), detecta separador, encuentra el encabezado salteando y
+  REPORTANDO la basura de arriba, parsea RFC4180 (comillas con comas y saltos
+  adentro), mapea columnas y aplica la reja anti-silencio.
+- **Reja** (nodo aparte): si la puerta marcó rechazo, tira la excepción. Está
+  separada para que la rama de la ficha se escriba ANTES de frenar.
+- **Ficha de entrada**: `salidas/ficha_entrada_<archivo>.md`, generada por el
+  workflow en las 5 corridas (también en el rechazo).
+- **Auditoría F11**: las 26 columnas de F07 + las columnas extra del cliente
+  (`extra_*`, `advertencia_entrada`) al final. Sin extras es byte a byte la de
+  F07 — por eso el golden no se mueve.
+- **Config versionada**: `config/sinonimos.json` (tabla general, coincidencia
+  exacta normalizada) y `config/mapeo_adversario2.json` (por cliente).
+  `Documento → cuil` vive en el mapeo del cliente a propósito: un "Documento"
+  puede ser DNI, decidir que es CUIL no es generalizable.
+
+**Decisiones de diseño que la fase no fijaba:**
+
+1. **La rama de entrada (texto vs planilla) se decide al GENERAR el workflow**,
+   por la extensión del path — que ya queda embebido en el JSON de todos modos.
+   El `.xlsx` va por `extractFromFile` (operación xlsx); el texto va por el
+   parser propio del nodo Code.
+2. **Regla del 80% refinada** (documentado acá porque la fase decía solo "80%
+   de las líneas"): las líneas con 1 solo campo no votan (no contienen el
+   separador: son título/basura, no evidencia en contra), pero la moda tiene
+   que aparecer en ≥50% del total muestreado (así un `;` perdido dentro de una
+   celda no gana con una sola línea). Dos separadores igual de consistentes =
+   ambiguo = rechazo.
+3. **Teléfono guardado como número en la planilla** → se serializa como
+   `1141617956.0` (el artefacto visible de Excel): si había un 0 inicial ya se
+   perdió y no hay forma de saberlo, así que un teléfono numérico no es
+   confiable. F01 lo marca `invalido` sin tocarlo, y el motivo queda en
+   `advertencia_entrada` y en la ficha.
+4. **El pasamanos (F00) ahora deja pasar `extra_*` y `advertencia_entrada`.**
+   Con el CSV canónico esas claves no existen: cero cambio de comportamiento
+   (verificado por el golden).
+5. **`data/leads_adversario_4.xlsx` se genera con biblioteca estándar**
+   (`herramientas/gen_xlsx_adversario4.py`, zipfile + XML): sin openpyxl, el
+   repo sigue sin dependencias.
+
+**Hallazgo técnico de la sesión:** en n8n 2.x el Code node corre en un task
+runner y el binario NO llega como base64 en `items[].binary.data.data` (queda
+una referencia); hay que pedirlo con `await helpers.getBinaryDataBuffer(0,
+'data')`. El síntoma era venenoso: la puerta "veía" un archivo de 1 línea y
+rechazaba todo. El nodo quedó con fallback al base64 para poder probar la
+lógica fuera de n8n.
+
+**Separador y encabezado detectados en las 5 corridas** (de las fichas):
+
+| Archivo | Separador | Encabezado | Salteadas | Filas |
+|---------|-----------|------------|-----------|-------|
+| `leads_prueba_SINTETICO_1.csv` | coma | línea 1 | 0 | 200 |
+| `leads_adversario_3.csv` | punto y coma | línea 1 | 0 | 5 (3 en zona, 2 fuera, todo poblado) |
+| `leads_adversario_2.csv` | coma | **línea 4** | **3** (2 con texto + 1 vacía) | 7 (+1 vacía ignorada; T55 completada con vacíos) |
+| `leads_adversario_4.xlsx` | n/a (planilla) | fila 1 | 0 | 4 (T71 invalido por artefacto de Excel) |
+| `leads_adversario_5_prosa.txt` | — | — | — | RECHAZADO |
+
+**Mensaje de error exacto del rechazo** (exit de error, sin archivo de salida,
+con ficha):
+
+> F11 RECHAZO — archivo: C:\\...\\data\\leads_adversario_5_prosa.txt —
+> detectado: ningun separador (coma, punto y coma, tabulador) produce una
+> cantidad estable de columnas (>=2) sobre las primeras 4 lineas no vacias —
+> esperado: una tabla con separador consistente; esto no parece una tabla
+
+**Valores distintos de `origen` en `leads_adversario_2.csv`** (insumo de la
+próxima decisión de negocio — ninguno coincide con las etiquetas que puntúa
+F06, así que hoy todos puntúan 0 en origen): `Referido` (2), `Web` (1),
+`Meta` (1), `Evento` (1), `Base propia` (1), vacío (1).
 
 **2026-07-31 — CORRECCIÓN F01: formatos de teléfono argentinos.** Se amplió
 `normalizarTelefono` en `gen_workflow.py` (JS_F01) para reconocer 7 formatos
