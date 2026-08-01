@@ -597,6 +597,17 @@ return items.map((item) => {
     descarte = true;
   }
 
+  // 7. Segmento no buscado (F12). La clave descarte_segmento SOLO existe si
+  // config/segmentacion.json pide descartar un tipo de persona. Con el default
+  // del repo (apagado) F12 no la escribe, este bloque no corre y el motivo no
+  // cambia ni un caracter: por eso el golden de F09 no se mueve. El descarte
+  // por segmento vive aca, con los otros descartes directos, para que toda la
+  // decision de prioridad siga estando en un solo nodo.
+  if (toBool(json.descarte_segmento)) {
+    partes.push(String(json.motivo_segmento || 'segmento no buscado') + ' ' + fmt(0) + ' \\u2192 descarte');
+    descarte = true;
+  }
+
   // Prioridad
   let prioridad;
   if (descarte) prioridad = 'descartado';
@@ -607,6 +618,79 @@ return items.map((item) => {
   json.puntaje = score;
   json.prioridad = prioridad;
   json.motivo = partes.join('; ');
+  return { json: json };
+});
+"""
+
+
+JS_F12 = """// F12 - Persona fisica vs. juridica (filtro 8 del catalogo, Nivel 1).
+//
+// Deriva tipo_persona (fisica | juridica | desconocida) del PREFIJO de
+// cuil_norm, que F02 ya calculo. No consulta ninguna fuente externa: sale
+// gratis del dato que ya esta en la lista.
+//
+// CONFIG viene de config/segmentacion.json, embebido al GENERAR el workflow
+// (mismo patron que el mapeo de F11: cambiar de cliente es editar un JSON y
+// regenerar, nunca editar JavaScript).
+//
+// EL DEFAULT DEL REPO ESTA APAGADO: {etiquetar:false, descartar:null}. Con esa
+// config este nodo devuelve los items TAL CUAL, sin agregar ni una clave. Por
+// eso sumarlo al pipeline no mueve el golden de F09 ni un byte. La segmentacion
+// es una decision comercial de UN cliente, no del producto.
+//
+// Cuatro reglas que no se negocian:
+//   1. Se clasifica por PREFIJO, aunque el DV sea invalido. Una empresa
+//      30-... con un typo en el digito verificador sigue siendo juridica.
+//      'desconocida' es solo cuando NO HAY prefijo utilizable (sin CUIL, CUIL
+//      corto, prefijo fuera del set). Que el DV falle es otra cosa: para eso
+//      esta cuil_valido.
+//   2. 'desconocida' NUNCA se descarta. No saber que es no es motivo para
+//      tirarlo: seria el error de "sin dato = fuera" que F04 ya tiene medido
+//      (T21). Solo se descarta el tipo EXPLICITO que pida la config.
+//   3. Descartar = marcar con motivo legible, NUNCA borrar la fila (regla 4
+//      del CLAUDE.md, regla 1 del catalogo).
+//   4. tipo_persona no suma ni resta puntaje. El unico efecto sobre el score
+//      es el descarte directo, y solo cuando la config lo pide. El puntaje de
+//      una lista sin segmentar y el de la misma lista etiquetada son iguales.
+//
+// Funcion pura.
+
+const CONFIG = __SEGMENTACION_JSON__;
+
+const FISICA = new Set(['20', '23', '24', '27']);
+const JURIDICA = new Set(['30', '33', '34']);
+const ETIQUETA = { fisica: 'persona física', juridica: 'persona jurídica' };
+
+function tipoPersona(cuilNorm) {
+  const d = String(cuilNorm === undefined || cuilNorm === null ? '' : cuilNorm).replace(/\\D/g, '');
+  if (d.length !== 11) return 'desconocida';
+  const pre = d.slice(0, 2);
+  if (FISICA.has(pre)) return 'fisica';
+  if (JURIDICA.has(pre)) return 'juridica';
+  return 'desconocida';
+}
+
+const etiquetar = CONFIG.etiquetar === true;
+// Solo estos dos valores descartan. Cualquier otra cosa (incluido
+// 'desconocida') no descarta a nadie; el generador ademas la rechaza antes.
+const descartar = (CONFIG.descartar === 'fisica' || CONFIG.descartar === 'juridica')
+  ? CONFIG.descartar : null;
+
+// Config apagada: el nodo es transparente. Ni una clave nueva, ni un byte.
+if (!etiquetar && descartar === null) {
+  return items;
+}
+
+return items.map((item) => {
+  const json = Object.assign({}, item.json);
+  const tipo = tipoPersona(json.cuil_norm);
+
+  if (etiquetar) json.tipo_persona = tipo;
+
+  if (descartar !== null && tipo === descartar) {
+    json.descarte_segmento = true;
+    json.motivo_segmento = ETIQUETA[tipo] + ' (segmento no buscado)';
+  }
   return { json: json };
 });
 """
@@ -1331,9 +1415,12 @@ return [{
 
 JS_F11_AUDIT = """// F11 - CSV de auditoria con columnas extra del cliente.
 // Identico a la auditoria de F07 (mismas 26 columnas, mismo orden, mismo
-// escape) MAS las columnas que la puerta conservo del archivo del cliente
-// (extra_*, advertencia_entrada), al final y ordenadas. Con el CSV canonico
-// no hay extras, asi que la salida es byte a byte la de F07 (golden intacto).
+// escape) MAS las columnas opcionales, al final y ordenadas:
+//   - las que la puerta conservo del archivo del cliente (extra_*)
+//   - advertencia_entrada (F11)
+//   - tipo_persona (F12, solo si la segmentacion esta etiquetando)
+// Ninguna de las tres existe con el CSV canonico y la config por defecto, asi
+// que la salida es byte a byte la de F07 (golden intacto).
 
 const COLS = [
   'nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga',
@@ -1345,10 +1432,12 @@ const COLS = [
   'puntaje', 'prioridad', 'motivo',
 ];
 
+const OPCIONALES = new Set(['advertencia_entrada', 'tipo_persona']);
+
 const extras = new Set();
 for (const item of items) {
   for (const k of Object.keys(item.json)) {
-    if (k.indexOf('extra_') === 0 || k === 'advertencia_entrada') extras.add(k);
+    if (k.indexOf('extra_') === 0 || OPCIONALES.has(k)) extras.add(k);
   }
 }
 const cols = COLS.concat(Array.from(extras).sort());
@@ -1439,6 +1528,11 @@ def _nodos_escritura(path_out, x_armar, x_escribir, convert_type_version=1.1):
             "position": [x_escribir, 0],
         },
     ]
+
+
+def _params(js, fecha_corte, seg_json):
+    """Reemplaza los parametros que se embeben al generar el workflow."""
+    return js.replace("__FECHA_CORTE__", fecha_corte).replace("__SEGMENTACION_JSON__", seg_json)
 
 
 def _nodo_code(node_id, name, js, x, code_type_version=2):
@@ -1567,6 +1661,7 @@ FASES = {
     "11": {
         "id": "f11puerta000001",
         "name": "10-puerta",
+        "puerta": True,
         "codes": [
             ("n3-pasamanos", "Pasamanos (todo string)", JS_F00),
             ("n4-telefono", "Normalizar telefono", JS_F01),
@@ -1583,7 +1678,66 @@ FASES = {
             "reporte": ("nG-reporte", "Reporte de impacto", JS_F08_REPORTE),
         },
     },
+    # F12 - persona fisica vs juridica. Es F11 mas un nodo: la segmentacion se
+    # decide DESPUES de tener el CUIL normalizado (F02) y ANTES del puntaje
+    # (F06), que es donde vive el descarte directo. F11 queda intacta a
+    # proposito: v11_puerta.py sigue verificando exactamente lo que cerro.
+    "12": {
+        "id": "f12persona00001",
+        "name": "11-persona",
+        "puerta": True,
+        "codes": [
+            ("n3-pasamanos", "Pasamanos (todo string)", JS_F00),
+            ("n4-telefono", "Normalizar telefono", JS_F01),
+            ("n5-cuil", "Validar CUIL", JS_F02),
+            ("n6-dedup", "Marcar duplicados", JS_F03),
+            ("n7-cobertura", "Completitud y cobertura", JS_F04),
+            ("n8-antiguedad", "Antiguedad del lead", JS_F05),
+            ("n8b-persona", "Persona física o jurídica", JS_F12),
+            ("n9-puntaje", "Puntaje explicable", JS_F06),
+            ("nA-ordenar", "Ordenar por prioridad y puntaje", JS_F07_SORT),
+        ],
+        "salida_dual": {
+            "comercial": ("nB-comercial", "CSV comercial", JS_F07_COMERCIAL),
+            "auditoria": ("nC-auditoria", "CSV auditoría (F11)", JS_F11_AUDIT),
+            "reporte": ("nG-reporte", "Reporte de impacto", JS_F08_REPORTE),
+        },
+    },
 }
+
+
+def _segmentacion_json(spec, segmentacion_path):
+    """Lee y valida config/segmentacion.json; devuelve el literal JS a embeber.
+
+    Solo se lee si la fase tiene el nodo de F12. La validacion es fuerte a
+    proposito: un valor raro en la config tiene que frenar al generar, no
+    convertirse en un descarte silencioso (o en ningun descarte) recien en n8n.
+    """
+    if not any("__SEGMENTACION_JSON__" in js for _, _, js in spec["codes"]):
+        return ""
+
+    if not segmentacion_path:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        segmentacion_path = os.path.join(base, "config", "segmentacion.json")
+    with open(segmentacion_path, "r", encoding="utf-8") as fh:
+        cfg = json.load(fh)
+
+    etiquetar = cfg.get("etiquetar", False)
+    descartar = cfg.get("descartar", None)
+    if not isinstance(etiquetar, bool):
+        raise SystemExit(
+            f"segmentacion {segmentacion_path}: 'etiquetar' tiene que ser true o false, "
+            f"vino {etiquetar!r}")
+    if descartar not in (None, "fisica", "juridica"):
+        extra = ""
+        if descartar == "desconocida":
+            extra = (" — 'desconocida' NUNCA se descarta: no saber que es un contacto "
+                     "no es motivo para tirarlo")
+        raise SystemExit(
+            f"segmentacion {segmentacion_path}: 'descartar' tiene que ser null, "
+            f"'fisica' o 'juridica', vino {descartar!r}{extra}")
+
+    return json.dumps({"etiquetar": etiquetar, "descartar": descartar}, ensure_ascii=False)
 
 
 def _js_puerta(path_in, mapeo_path):
@@ -1620,22 +1774,24 @@ def _js_puerta(path_in, mapeo_path):
 
 def build(path_in, path_out, fase="00", code_type_version=2, convert_type_version=1.1,
           fecha_corte="", path_out_audit="", path_reporte="", mapeo_path="",
-          ficha_out=""):
+          ficha_out="", segmentacion_path=""):
     if fase not in FASES:
         raise SystemExit(f"fase desconocida: {fase!r}. Conocidas: {sorted(FASES)}")
     spec = FASES[fase]
+    seg_json = _segmentacion_json(spec, segmentacion_path)
 
     def link(a, b):
         return {a: {"main": [[{"node": b, "type": "main", "index": 0}]]}}
 
-    if fase == "11":
+    if spec.get("puerta"):
         return _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
-                          path_out_audit, path_reporte, mapeo_path, ficha_out, link)
+                          path_out_audit, path_reporte, mapeo_path, ficha_out, link,
+                          seg_json)
 
     nodos = _nodos_lectura(path_in)
     x = 600
     for node_id, name, js in spec["codes"]:
-        js_final = js.replace("__FECHA_CORTE__", fecha_corte)
+        js_final = _params(js, fecha_corte, seg_json)
         nodos.append(_nodo_code(node_id, name, js_final, x, code_type_version))
         x += 200
 
@@ -1697,7 +1853,8 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
 
 
 def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
-               path_out_audit, path_reporte, mapeo_path, ficha_out, link):
+               path_out_audit, path_reporte, mapeo_path, ficha_out, link,
+               seg_json=""):
     """Cablea el workflow de F11.
 
     trigger -> leer -> [planilla a items (solo xlsx)] -> puerta
@@ -1750,7 +1907,7 @@ def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
 
     cadena = [reja]
     for node_id, name, js in spec["codes"]:
-        js_final = js.replace("__FECHA_CORTE__", fecha_corte)
+        js_final = _params(js, fecha_corte, seg_json)
         n = _nodo_code(node_id, name, js_final, x, code_type_version)
         nodos.append(n)
         cadena.append(n)
@@ -1830,6 +1987,8 @@ if __name__ == "__main__":
                     help="F11: config/mapeo_<cliente>.json (opcional)")
     ap.add_argument("--ficha-out", default="",
                     help="F11: ruta de la ficha de entrada (default: salidas/ficha_entrada_<archivo>.md)")
+    ap.add_argument("--segmentacion", default="",
+                    help="F12: config de segmentacion (default: config/segmentacion.json)")
     ap.add_argument("--code-tv", type=float, default=2)
     ap.add_argument("--convert-tv", type=float, default=1.1)
     args = ap.parse_args()
@@ -1845,6 +2004,7 @@ if __name__ == "__main__":
         path_reporte=args.reporte_out,
         mapeo_path=args.mapeo,
         ficha_out=args.ficha_out,
+        segmentacion_path=args.segmentacion,
     )
     with open(args.destino, "w", encoding="utf-8") as fh:
         json.dump(wf, fh, indent=2, ensure_ascii=False)

@@ -1,0 +1,12 @@
+nombre,cuil,telefono,localidad,origen,fecha_carga
+S01 Ana Fisica Veinte,20-31445901-7,011-41617801,Castelar,referido,2026-07-20
+S02 Bruno Fisico Veintitres,23-37451201-3,011-41617802,Haedo,referido,2026-07-20
+S03 Celia Fisica Veinticuatro,24-34501278-4,011-41617803,Morón,referido,2026-07-20
+S04 Dario Fisico Veintisiete,27-35110489-4,011-41617804,Hurlingham,referido,2026-07-20
+S05 Empresa Treinta SA,30-70999888-5,011-41617805,Ituzaingó,referido,2026-07-20
+S06 Empresa Treintaitres SRL,33-69876543-2,011-41617806,Ramos Mejía,referido,2026-07-20
+S07 Empresa Treintaicuatro SA,34-60123456-6,011-41617807,San Justo,referido,2026-07-20
+S08 Sin Cuil Ninguno,,011-41617808,Villa Luzuriaga,referido,2026-07-20
+S09 Prefijo Raro Noventaynueve,99-44122335-4,011-41617809,Castelar,referido,2026-07-20
+S10 Empresa Treinta Dv Roto,30-71234570-9,011-41617810,Haedo,referido,2026-07-20
+S11 Cuil Corto Nueve Digitos,20-4412233,011-41617811,Morón,referido,2026-07-20

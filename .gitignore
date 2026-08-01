@@ -4,6 +4,7 @@ salidas/reporte_*.md
 salidas/reporte.md
 salidas/_golden_tmp_*
 salidas/_v11_*
+salidas/_v12_*
 
 # Las fichas de entrada (F11) SI se versionan: son el entregable visible de
 # la puerta y v11_puerta.py las regenera deterministicamente.

@@ -1,0 +1,451 @@
+{
+  "id": "f12persona00001",
+  "name": "11-persona",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "n0-trigger",
+      "name": "Ejecutar manualmente",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\data\\leads_prueba_SINTETICO_1.csv",
+        "options": {}
+      },
+      "id": "n1-leer",
+      "name": "Leer CSV de disco",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F11 - Puerta de entrada (modo texto).\n//\n// Todo F00-F10 supone que el archivo es NUESTRO CSV: coma, UTF-8, seis\n// columnas conocidas, encabezado en la fila 1. Este nodo se ocupa del archivo\n// de un CLIENTE: o lo entiende, o lo rechaza con un error que se entiende.\n// Lo unico prohibido es procesarlo mal en silencio (hallazgo 13: el CSV con\n// ';' salio con cara de correcto y las 5 filas vacias).\n//\n// REGLA DE ORO: ante la duda, frenar fuerte. No se adivina un separador, no\n// se mapea una columna por parecido, no se rellena un dato.\n//\n// El rechazo NO se lanza aca: se marca en _rechazo y lo lanza el nodo Reja,\n// DESPUES de que la rama de la ficha escribio su archivo. Un rechazo sin\n// ficha no explica nada.\n//\n// SINONIMOS y MAPEO vienen de config/sinonimos.json y config/mapeo_*.json,\n// embebidos al GENERAR el workflow. Cambiar de cliente = otro JSON en config/\n// y regenerar; nunca editar JavaScript.\n\nconst ARCHIVO = \"C:\\\\Users\\\\pedro\\\\OneDrive\\\\Desktop\\\\anaze\\\\cosas\\\\call center\\\\data\\\\leads_prueba_SINTETICO_1.csv\";\nconst MODO = 'texto';\nconst SINONIMOS = {\"_comentario\": [\"Tabla general de sinonimos para el mapeo automatico de columnas (F11).\", \"La comparacion es EXACTA sobre el nombre normalizado (minusculas, sin\", \"tildes, espacios colapsados). No hay matching por parecido ni por\", \"posicion: si el nombre de una columna no esta aca, se resuelve con un\", \"config/mapeo_<cliente>.json o la corrida se frena.\", \"'documento' NO es sinonimo de cuil a proposito: un 'Documento' puede ser\", \"un DNI, y decidir que es un CUIL es una decision por cliente, no general.\"], \"nombre\": [\"nombre\", \"nombre y apellido\", \"apellido y nombre\", \"nombre completo\", \"contacto\"], \"cuil\": [\"cuil\", \"cuit\", \"cuil/cuit\", \"nro de cuil\", \"numero de cuil\"], \"telefono\": [\"telefono\", \"tel\", \"telefono celular\", \"celular\", \"movil\", \"nro de telefono\", \"numero de telefono\", \"telefono de contacto\"], \"localidad\": [\"localidad\", \"ciudad\", \"partido\", \"zona\", \"barrio\"], \"origen\": [\"origen\", \"origen del lead\", \"fuente\", \"canal\"], \"fecha_carga\": [\"fecha_carga\", \"fecha de carga\", \"fecha de alta\", \"fecha alta\", \"fecha de ingreso\", \"fecha\"]};\nconst MAPEO = null;\n\nconst CANONICAS = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga'];\n\nfunction normNombre(s) {\n  return String(s === undefined || s === null ? '' : s)\n    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .toLowerCase().trim().replace(/\\s+/g, ' ');\n}\n\n// Cantidad de campos de una linea, fuera de comillas. Para DETECTAR el\n// separador; el parseo real es parsearCSV, abajo.\nfunction contarCampos(linea, sep) {\n  let n = 1, enComillas = false;\n  for (let i = 0; i < linea.length; i++) {\n    const ch = linea[i];\n    if (ch === '\"') enComillas = !enComillas;\n    else if (ch === sep && !enComillas) n++;\n  }\n  return n;\n}\n\n// Parser CSV RFC4180: campos entrecomillados con separadores, comillas\n// escapadas (\"\") y saltos de linea adentro. Devuelve registros (arrays).\nfunction parsearCSV(texto, sep) {\n  const registros = [];\n  let campo = '', registro = [], enComillas = false;\n  for (let i = 0; i < texto.length; i++) {\n    const ch = texto[i];\n    if (enComillas) {\n      if (ch === '\"') {\n        if (texto[i + 1] === '\"') { campo += '\"'; i++; }\n        else enComillas = false;\n      } else campo += ch;\n    } else if (ch === '\"' && campo === '') {\n      enComillas = true;\n    } else if (ch === sep) {\n      registro.push(campo); campo = '';\n    } else if (ch === '\\n' || ch === '\\r') {\n      if (ch === '\\r' && texto[i + 1] === '\\n') i++;\n      registro.push(campo); campo = '';\n      registros.push(registro); registro = [];\n    } else {\n      campo += ch;\n    }\n  }\n  if (campo !== '' || registro.length) { registro.push(campo); registros.push(registro); }\n  return registros;\n}\n\nconst meta = {\n  archivo: ARCHIVO,\n  tam: null,\n  formato: MODO === 'texto' ? 'CSV / texto plano' : 'planilla (xlsx)',\n  separador: MODO === 'texto' ? '' : 'n/a (planilla)',\n  encoding: MODO === 'texto' ? '' : 'n/a (planilla)',\n  encabezadoLinea: null,\n  salteadas: [],\n  columnas: [],\n  mapeo: [],\n  extras: [],\n  faltantes: [],\n  filasLeidas: 0,\n  filasVaciasIgnoradas: 0,\n  filasTodoVacio: 0,\n  filasIncompletas: [],\n  advertencias: [],\n  origenes: null,\n  estado: 'ACEPTADO',\n  motivoRechazo: '',\n};\n\nfunction armarFicha(m) {\n  const L = [];\n  L.push('# Ficha de entrada \\u2014 ' + m.archivo.split(/[\\\\/]/).pop());\n  L.push('');\n  L.push('Generada por el workflow ANTES de confiar en la corrida. Todos los');\n  L.push('numeros salen del archivo de origen, no de la salida.');\n  L.push('');\n  L.push('| Campo | Valor |');\n  L.push('|-------|-------|');\n  L.push('| Estado | **' + m.estado + '** |');\n  if (m.motivoRechazo) L.push('| Motivo del rechazo | ' + m.motivoRechazo.replace(/\\|/g, '\\\\|') + ' |');\n  L.push('| Archivo | ' + m.archivo + ' |');\n  L.push('| Tama\\u00f1o | ' + (m.tam === null ? 'n/d' : m.tam + ' bytes') + ' |');\n  L.push('| Formato | ' + m.formato + ' |');\n  L.push('| Separador detectado | ' + (m.separador || 'n/d') + ' |');\n  L.push('| Encoding | ' + (m.encoding || 'n/d') + ' |');\n  L.push('| Encabezado en la linea | ' + (m.encabezadoLinea === null ? 'n/d' : m.encabezadoLinea) + ' |');\n  L.push('| Lineas salteadas arriba del encabezado | ' + m.salteadas.length + ' |');\n  L.push('| Filas de datos leidas | ' + m.filasLeidas + ' |');\n  L.push('| Filas vacias ignoradas | ' + m.filasVaciasIgnoradas + ' |');\n  L.push('| Filas con los 6 campos canonicos vacios | ' + m.filasTodoVacio + ' |');\n  L.push('');\n  if (m.salteadas.length) {\n    L.push('## Lineas salteadas (basura arriba del encabezado)');\n    L.push('');\n    m.salteadas.forEach((s) => L.push('- linea ' + s.linea + ': ' + (s.contenido || '(vacia)')));\n    L.push('');\n  }\n  L.push('## Columnas encontradas');\n  L.push('');\n  m.columnas.forEach((c) => L.push('- ' + (c === '' ? '(sin nombre)' : c)));\n  L.push('');\n  if (m.mapeo.length) {\n    L.push('## Mapeo aplicado');\n    L.push('');\n    L.push('| Columna del archivo | Canonica | Como se resolvio |');\n    L.push('|---------------------|----------|------------------|');\n    m.mapeo.forEach((mm) => L.push('| ' + mm.orig + ' | ' + mm.canonica + ' | ' + mm.fuente + ' |'));\n    L.push('');\n  }\n  if (m.faltantes.length) {\n    L.push('## Columnas canonicas SIN RESOLVER');\n    L.push('');\n    m.faltantes.forEach((c) => L.push('- ' + c));\n    L.push('');\n  }\n  if (m.extras.length) {\n    L.push('## Columnas extra (se conservan en la auditoria, no puntuan)');\n    L.push('');\n    m.extras.forEach((c) => L.push('- ' + c));\n    L.push('');\n  }\n  if (m.filasIncompletas.length) {\n    L.push('## Filas incompletas (los campos que faltan quedan vacios)');\n    L.push('');\n    m.filasIncompletas.forEach((f) => L.push('- ' + f));\n    L.push('');\n  }\n  if (m.advertencias.length) {\n    L.push('## Advertencias');\n    L.push('');\n    m.advertencias.forEach((a) => L.push('- ' + a));\n    L.push('');\n  }\n  if (m.origenes) {\n    L.push('## Valores distintos de `origen`');\n    L.push('');\n    L.push('Se listan como vienen; NO se normalizan (eso es otra fase). Si estas');\n    L.push('etiquetas no coinciden con las que puntua F06, el puntaje de origen da 0.');\n    L.push('');\n    L.push('| Valor | Filas |');\n    L.push('|-------|-------|');\n    Object.keys(m.origenes).sort().forEach((k) => {\n      L.push('| ' + (k === '' ? '(vacio)' : k) + ' | ' + m.origenes[k] + ' |');\n    });\n    L.push('');\n  }\n  return L.join('\\n') + '\\n';\n}\n\nfunction frenar(detectado, esperado) {\n  const e = new Error(\n    'F11 RECHAZO \\u2014 archivo: ' + ARCHIVO +\n    ' \\u2014 detectado: ' + detectado +\n    ' \\u2014 esperado: ' + esperado\n  );\n  e._esRechazo = true;\n  throw e;\n}\n\ntry {\n  let encabezados = null;   // nombres originales de columna\n  let filasDatos = null;    // array de objetos { encabezado: valor }\n\n  if (MODO === 'texto') {\n    // En n8n 2.x el Code node corre en un task runner: el binario NO viaja\n    // como base64 dentro de items[].binary (ahi queda una referencia), se\n    // pide con helpers.getBinaryDataBuffer. El fallback a items[].binary\n    // existe para poder probar esta logica fuera de n8n (Node pelado).\n    let buf = null;\n    if (typeof helpers !== 'undefined' && helpers && helpers.getBinaryDataBuffer) {\n      buf = await helpers.getBinaryDataBuffer(0, 'data');\n    } else if (items[0].binary && items[0].binary.data && items[0].binary.data.data) {\n      buf = Buffer.from(items[0].binary.data.data, 'base64');\n    }\n    if (!buf || !buf.length) throw new Error('F11: no llego el archivo binario al nodo Puerta');\n    meta.tam = buf.length;\n\n    const conBOM = buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF;\n    const cuerpo = conBOM ? buf.slice(3) : buf;\n    let texto = cuerpo.toString('utf8');\n    if (texto.indexOf('\\uFFFD') >= 0) {\n      // No era UTF-8 valido. Latin-1 mapea todos los bytes: no pierde nada.\n      texto = cuerpo.toString('latin1');\n      meta.encoding = 'Latin-1 (no era UTF-8 valido)';\n      meta.advertencias.push('el archivo no es UTF-8; se leyo como Latin-1 (revisar tildes en la salida)');\n    } else {\n      meta.encoding = conBOM ? 'UTF-8 con BOM' : 'UTF-8 sin BOM';\n    }\n\n    // --- Deteccion de separador ---\n    // Regla de la fase: gana el que produce la MISMA cantidad de campos (>=2)\n    // en al menos el 80% de las primeras 10 lineas no vacias. Refinamientos\n    // (documentados en ESTADO.md):\n    //   - una linea con 1 solo campo no vota (no contiene el separador: es\n    //     titulo/basura, no evidencia en contra) -> el 80% se exige sobre las\n    //     lineas con >=2 campos;\n    //   - pero la moda tiene que aparecer en >=50% del TOTAL de las lineas\n    //     muestreadas, para que un ';' perdido dentro de una celda no gane\n    //     con una sola linea;\n    //   - dos separadores igual de consistentes = ambiguo = rechazo.\n    const lineas = texto.split(/\\r\\n|\\r|\\n/);\n    const muestra = lineas.filter((l) => l.trim() !== '').slice(0, 10);\n    if (muestra.length === 0) frenar('archivo vacio (0 lineas con contenido)', 'un archivo con encabezado y datos');\n\n    const SEPS = [[',', 'coma'], [';', 'punto y coma'], ['\\t', 'tabulador']];\n    const aptos = [];\n    for (const par of SEPS) {\n      const sep = par[0], nombreSep = par[1];\n      const counts = muestra.map((l) => contarCampos(l, sep));\n      const multi = counts.filter((c) => c >= 2);\n      if (!multi.length) continue;\n      const frec = new Map();\n      multi.forEach((c) => frec.set(c, (frec.get(c) || 0) + 1));\n      let moda = 0, fmax = 0;\n      frec.forEach((f, c) => { if (f > fmax) { fmax = f; moda = c; } });\n      const soporteMulti = fmax / multi.length;\n      const soporteTotal = counts.filter((c) => c === moda).length / counts.length;\n      if (soporteMulti >= 0.8 && soporteTotal >= 0.5) {\n        aptos.push({ sep: sep, nombreSep: nombreSep, moda: moda, soporteTotal: soporteTotal });\n      }\n    }\n    if (aptos.length === 0) {\n      frenar(\n        'ningun separador (coma, punto y coma, tabulador) produce una cantidad estable de columnas (>=2) sobre las primeras ' + muestra.length + ' lineas no vacias',\n        'una tabla con separador consistente; esto no parece una tabla'\n      );\n    }\n    aptos.sort((a, b) => b.soporteTotal - a.soporteTotal);\n    if (aptos.length > 1 && aptos[0].soporteTotal === aptos[1].soporteTotal) {\n      frenar(\n        'dos separadores igual de consistentes: ' + aptos[0].nombreSep + ' y ' + aptos[1].nombreSep,\n        'un unico separador dominante; no se adivina'\n      );\n    }\n    const sep = aptos[0].sep;\n    meta.separador = aptos[0].nombreSep;\n\n    // --- Parseo completo + encabezado ---\n    const registros = parsearCSV(texto, sep);\n    const esVacio = (r) => r.every((c) => String(c).trim() === '');\n\n    const frecCols = new Map();\n    registros.forEach((r) => {\n      if (esVacio(r) || r.length < 2) return;\n      frecCols.set(r.length, (frecCols.get(r.length) || 0) + 1);\n    });\n    let modaCols = 0, fcmax = 0;\n    frecCols.forEach((f, c) => { if (f > fcmax) { fcmax = f; modaCols = c; } });\n    if (modaCols < 2) {\n      frenar('una sola columna en un archivo de ' + registros.length + ' lineas', 'al menos 2 columnas');\n    }\n\n    // El encabezado es la primera linea cuya cantidad de campos coincide con\n    // la de la mayoria. Lo de arriba se saltea y se REPORTA, no muere mudo.\n    const headerIdx = registros.findIndex((r) => !esVacio(r) && r.length === modaCols);\n    meta.encabezadoLinea = headerIdx + 1;\n    for (let i = 0; i < headerIdx; i++) {\n      const r = registros[i];\n      meta.salteadas.push({\n        linea: i + 1,\n        contenido: esVacio(r) ? '' : r.join(sep === '\\t' ? ' ' : sep).slice(0, 80),\n      });\n    }\n    encabezados = registros[headerIdx].map((c) => String(c).trim());\n\n    filasDatos = [];\n    for (let i = headerIdx + 1; i < registros.length; i++) {\n      const r = registros[i];\n      if (esVacio(r)) { meta.filasVaciasIgnoradas++; continue; }\n      let campos = r.slice();\n      if (campos.length > encabezados.length) {\n        const sobra = campos.slice(encabezados.length);\n        if (sobra.every((c) => String(c).trim() === '')) {\n          campos = campos.slice(0, encabezados.length);\n          meta.advertencias.push('linea ' + (i + 1) + ': campos vacios de mas al final, recortados');\n        } else {\n          frenar(\n            'la linea ' + (i + 1) + ' tiene ' + campos.length + ' campos con contenido y el encabezado tiene ' + encabezados.length,\n            'filas con a lo sumo tantos campos como el encabezado'\n          );\n        }\n      }\n      if (campos.length < encabezados.length) {\n        meta.filasIncompletas.push(\n          'linea ' + (i + 1) + ': ' + campos.length + ' de ' + encabezados.length + ' campos'\n        );\n        while (campos.length < encabezados.length) campos.push('');\n      }\n      const obj = {};\n      encabezados.forEach((h, j) => { obj[h] = campos[j]; });\n      filasDatos.push(obj);\n    }\n  } else {\n    // Planilla: los items ya vienen de extractFromFile (operation xlsx), que\n    // es la unica pieza que sabe leer el formato. Aca no hay separador ni\n    // encabezado que buscar: la primera fila de la hoja es el encabezado.\n    meta.encabezadoLinea = 1;\n    encabezados = [];\n    const visto = new Set();\n    for (const it of items) {\n      for (const k of Object.keys(it.json)) {\n        if (!visto.has(k)) { visto.add(k); encabezados.push(k); }\n      }\n    }\n    encabezados = encabezados.map((h) => String(h).trim());\n    filasDatos = items.map((it) => it.json);\n  }\n\n  meta.columnas = encabezados.slice();\n\n  // --- Encabezados repetidos: mapeo ambiguo, se frena ---\n  const nrm = encabezados.map(normNombre);\n  for (let i = 0; i < nrm.length; i++) {\n    if (nrm[i] !== '' && nrm.indexOf(nrm[i]) !== i) {\n      frenar(\"columna repetida en el encabezado: '\" + encabezados[i] + \"'\", 'nombres de columna unicos');\n    }\n  }\n\n  // --- Mapeo: primero el del cliente, despues sinonimos. Nunca por parecido ---\n  const MAPEO_NORM = {};\n  if (MAPEO) {\n    for (const k of Object.keys(MAPEO)) {\n      if (k.indexOf('_') === 0) continue;\n      MAPEO_NORM[normNombre(k)] = MAPEO[k];\n    }\n  }\n  const SIN_NORM = {};\n  for (const canon of Object.keys(SINONIMOS)) {\n    if (canon.indexOf('_') === 0) continue;\n    SINONIMOS[canon].forEach((s) => { SIN_NORM[normNombre(s)] = canon; });\n  }\n\n  const resolucion = {};   // canonica -> { orig, fuente }\n  const usadas = new Set();\n  for (const h of encabezados) {\n    const destino = MAPEO_NORM[normNombre(h)];\n    if (!destino) continue;\n    if (resolucion[destino]) {\n      frenar(\n        \"dos columnas ('\" + resolucion[destino].orig + \"' y '\" + h + \"') mapean a '\" + destino + \"'\",\n        'una columna por canonica'\n      );\n    }\n    resolucion[destino] = { orig: h, fuente: 'mapeo del cliente' };\n    usadas.add(h);\n  }\n  for (const canon of CANONICAS) {\n    if (resolucion[canon]) continue;\n    const cand = encabezados.filter((h) => !usadas.has(h) && SIN_NORM[normNombre(h)] === canon);\n    if (cand.length > 1) {\n      frenar(\n        \"dos columnas ('\" + cand.join(\"', '\") + \"') coinciden por sinonimos con '\" + canon + \"'\",\n        'una columna por canonica; resolver con config/mapeo_<cliente>.json'\n      );\n    }\n    if (cand.length === 1) {\n      resolucion[canon] = {\n        orig: cand[0],\n        fuente: normNombre(cand[0]) === canon ? 'nombre canonico' : 'sinonimos',\n      };\n      usadas.add(cand[0]);\n    }\n  }\n\n  meta.faltantes = CANONICAS.filter((c) => !resolucion[c]);\n  if (meta.faltantes.length) {\n    frenar(\n      \"columnas canonicas sin resolver: [\" + meta.faltantes.join(', ') + \"]. Columnas del archivo: [\" + encabezados.join(', ') + \"]\",\n      'resolverlas por config/mapeo_<cliente>.json o config/sinonimos.json; no se adivina por parecido ni por posicion'\n    );\n  }\n  meta.mapeo = CANONICAS.map((c) => ({ canonica: c, orig: resolucion[c].orig, fuente: resolucion[c].fuente }));\n  meta.extras = encabezados.filter((h) => !usadas.has(h) && normNombre(h) !== '');\n\n  // --- Construir filas canonicas ---\n  const filasOut = [];\n  for (let i = 0; i < filasDatos.length; i++) {\n    const fila = filasDatos[i];\n    const out = {};\n    const adv = [];\n    for (const canon of CANONICAS) {\n      let v = fila[resolucion[canon].orig];\n      if (typeof v === 'number') {\n        // Celda numerica de planilla. Para el telefono es la trampa clasica\n        // de Excel: si habia un 0 inicial (011-...), ya se perdio y no hay\n        // forma de saberlo. Un telefono asi no es confiable: se serializa\n        // con el artefacto visible (.0) para que F01 lo marque invalido,\n        // y el motivo queda en advertencia_entrada y en la ficha.\n        if (canon === 'telefono') {\n          adv.push('telefono llego como numero de planilla (posible perdida del 0 inicial): artefacto de Excel');\n          v = v.toFixed(1);\n        } else {\n          adv.push(canon + ' llego como numero de planilla');\n          v = String(v);\n        }\n      }\n      out[canon] = (v === undefined || v === null) ? '' : String(v);\n    }\n    for (const h of meta.extras) {\n      const v = fila[h];\n      out['extra_' + h] = (v === undefined || v === null) ? '' : String(v);\n    }\n    if (CANONICAS.every((c) => out[c].trim() === '')) meta.filasTodoVacio++;\n    if (adv.length) {\n      out.advertencia_entrada = adv.join('; ');\n      meta.advertencias.push('fila ' + (i + 1) + ' de datos: ' + adv.join('; '));\n    }\n    filasOut.push(out);\n  }\n  meta.filasLeidas = filasOut.length;\n\n  // --- Reja anti-silencio: los checks que habrian atrapado el hallazgo 13 ---\n  if (filasOut.length === 0) {\n    frenar('cero filas de datos despues del encabezado', 'al menos una fila de datos');\n  }\n  if (meta.filasTodoVacio / filasOut.length > 0.5) {\n    frenar(\n      meta.filasTodoVacio + ' de ' + filasOut.length + ' filas con los 6 campos canonicos vacios',\n      'una lista con datos; esto no es una lista mala, es un parseo mal hecho'\n    );\n  }\n\n  const origenes = {};\n  filasOut.forEach((o) => {\n    const k = String(o.origen || '').trim();\n    origenes[k] = (origenes[k] || 0) + 1;\n  });\n  meta.origenes = origenes;\n\n  const salida = filasOut.map((o) => ({ json: o }));\n  salida[0].json._ficha = armarFicha(meta);\n  return salida;\n\n} catch (e) {\n  if (!e._esRechazo) throw e;\n  meta.estado = 'RECHAZADO';\n  meta.motivoRechazo = e.message;\n  return [{ json: { _rechazo: e.message, _ficha: armarFicha(meta) } }];\n}\n"
+      },
+      "id": "nP-puerta",
+      "name": "Puerta de entrada",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F11 - Ficha de entrada. Toma el markdown que armo la puerta y lo convierte\n// en archivo. Se escribe SIEMPRE: tambien (sobre todo) cuando la corrida se\n// rechaza, porque la ficha es lo que se lee antes de apretar correr.\nconst md = String((items[0] && items[0].json && items[0].json._ficha) || '');\nif (md === '') throw new Error('F11: la puerta no dejo la ficha de entrada');\nconst buf = Buffer.from(md, 'utf-8');\nreturn [{\n  json: {},\n  binary: {\n    data: {\n      data: buf.toString('base64'),\n      mimeType: 'text/markdown',\n      fileName: 'ficha.md',\n    }\n  }\n}];\n"
+      },
+      "id": "nE-ficha",
+      "name": "Ficha de entrada",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\salidas\\ficha_entrada_leads_prueba_SINTETICO_1.md",
+        "options": {}
+      },
+      "id": "nE-ficha-escribir",
+      "name": "Escribir ficha de entrada",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        800,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F11 - Reja. Si la puerta marco rechazo, aca se corta la corrida con una\n// excepcion de n8n (exit code de error, SIN archivo de salida). Esta separado\n// de la puerta para que la rama de la ficha alcance a escribirse ANTES de\n// frenar: un rechazo sin ficha no explica nada.\nif (items.length && items[0].json._rechazo) {\n  throw new Error(items[0].json._rechazo);\n}\nreturn items;\n"
+      },
+      "id": "nR-reja",
+      "name": "Reja anti-silencio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F00 - Pasamanos. Cero logica de negocio.\n//\n// Este nodo no arregla nada: es un guardarrail.\n//\n// COMPROBADO en n8n 2.31.7 (2026-07-27): el nodo \"Extract From File\" ya\n// entrega los 6 campos como string. Los 45 telefonos con cero inicial y los\n// CUILs con guiones sobreviven sin este nodo. O sea: HOY es redundante.\n//\n// Se deja igual por dos motivos. Primero, deja el punto de entrada listo para\n// F01, que necesita un Code node justo aca. Segundo, si una version futura de\n// n8n cambia el parseo, el verificador v00 lo detecta y este nodo es donde se\n// arregla. Un guardarrail que no cuesta nada se deja puesto.\n\nconst COLUMNAS = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga'];\n\nreturn items.map((item) => {\n  const fila = {};\n  for (const col of COLUMNAS) {\n    const v = item.json[col];\n    fila[col] = (v === undefined || v === null) ? '' : String(v);\n  }\n  // F11: la puerta de entrada puede agregar columnas del archivo del cliente\n  // (extra_*) y advertencias de lectura (advertencia_entrada). Se dejan pasar\n  // hasta la auditoria. Con el CSV canonico estas claves no existen, asi que\n  // este bloque no cambia ni un byte de la salida de F00-F08 (golden intacto).\n  // Lo interno de la puerta (_ficha, _rechazo) NO pasa: muere aca.\n  for (const [k, v] of Object.entries(item.json)) {\n    if (k.indexOf('extra_') === 0 || k === 'advertencia_entrada') {\n      fila[k] = (v === undefined || v === null) ? '' : String(v);\n    }\n  }\n  return { json: fila };\n});\n"
+      },
+      "id": "n3-pasamanos",
+      "name": "Pasamanos (todo string)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F01 - Normalizacion de telefono.\n//\n// Deriva dos campos nuevos por contacto: telefono_norm (canonico) y\n// telefono_tipo. El campo 'telefono' original NO se toca.\n//\n// Canonico (siempre con prefijo +54; el 9 aparece SOLO en celular):\n//   celular   +549 + 10 digitos nacionales   <- el 9 distingue celular de fijo\n//   fijo      +54  + 10 digitos nacionales\n//   ambiguo   +54  + 10 digitos nacionales   <- 10 digitos pelados, sin afirmar movil\n//   invalido  ''\n//\n// El 9 de +549 es lo unico que separa un celular de un fijo en AMBA. Si el\n// canonico lo descartara, un fijo y un celular con los mismos 8 digitos finales\n// colisionarian y F03 los fusionaria mal. Por eso el celular conserva el 9:\n//   celular +5491139927555  vs  fijo +541139927555  -> distintos.\n//\n// El tipo se infiere del FORMATO DE ENTRADA, no del canonico ya recortado.\n// Los 10 digitos sin prefijo son ambiguos de verdad (fijo o celular): NO se\n// adivina, se marcan 'ambiguo' y en F06 llevan puntaje intermedio.\n// Nada se completa: un truncado de 6 digitos es invalido, no se rellena.\n//\n// Funcion pura: mismo input -> mismo output, sin estado externo.\n\nfunction normalizarTelefono(raw) {\n  const s = (raw === undefined || raw === null) ? '' : String(raw).trim();\n\n  // Notacion cientifica (dano de Excel) -> invalido. Va antes del filtro de\n  // letras porque la E del exponente dispararia esa regla.\n  if (/^\\d+\\.\\d+[eE]\\+\\d+$/.test(s)) {\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // Texto (\"sin dato\" / \"sindato\" / \"N/D\") -> invalido.\n  if (/[a-zA-Z]/.test(s)) {\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // Dos telefonos separados por '/': se toma el primero.\n  let input = s;\n  if (s.indexOf('/') >= 0) {\n    input = s.split('/')[0].trim();\n  }\n\n  // Sacar espacios internos antes de clasificar (causa raiz de T01-T04).\n  const limpio = input.replace(/\\s+/g, '');\n  const digitos = limpio.replace(/\\D/g, '');\n\n  if (digitos.length === 0) {\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // +549... -> celular (el 9 puede estar pegado o separado por espacios).\n  if (limpio.startsWith('+549')) {\n    const nac = digitos.slice(3);\n    if (nac.length === 10) return { telefono_norm: '+549' + nac, telefono_tipo: 'celular' };\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // +54 sin 9 -> fijo (formato internacional sin indicador de celular).\n  if (limpio.startsWith('+54')) {\n    const nac = digitos.slice(2);\n    if (nac.length === 10) return { telefono_norm: '+54' + nac, telefono_tipo: 'fijo' };\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // 549... sin el '+' -> celular (13 digitos).\n  if (digitos.startsWith('549') && digitos.length === 13) {\n    const nac = digitos.slice(3);\n    return { telefono_norm: '+549' + nac, telefono_tipo: 'celular' };\n  }\n\n  // 0XX 15 XXXX-XXXX -> celular (formato viejo argentino con 15).\n  // Estructura: 0 + area(2-4 dig) + 15 + abonado(8 dig) = 13-15 digitos.\n  if (digitos[0] === '0' && digitos.length >= 13 && digitos.length <= 15) {\n    for (let areaLen = 2; areaLen <= 4; areaLen++) {\n      const area = digitos.slice(1, 1 + areaLen);\n      const resto = digitos.slice(1 + areaLen);\n      if (resto.startsWith('15') && resto.length === 10) {\n        const abonado = resto.slice(2);\n        return { telefono_norm: '+549' + area + abonado, telefono_tipo: 'celular' };\n      }\n    }\n  }\n\n  // Fijo: 11 digitos con 0 inicial (011-... o 011... sin guion). Nacional = sin el 0.\n  if (digitos.length === 11 && digitos[0] === '0') {\n    return { telefono_norm: '+54' + digitos.slice(1), telefono_tipo: 'fijo' };\n  }\n\n  // 15-XXXX-XXXX sin codigo de area -> invalido. No se adivina el area.\n  if (digitos.startsWith('15') && digitos.length === 10) {\n    return { telefono_norm: '', telefono_tipo: 'invalido' };\n  }\n\n  // Ambiguo: exactamente 10 digitos sin prefijo. Puede ser fijo o celular.\n  if (digitos.length === 10 && !limpio.startsWith('+')) {\n    return { telefono_norm: '+54' + digitos, telefono_tipo: 'ambiguo' };\n  }\n\n  // Todo lo demas (truncado de 6, largos raros) -> invalido. No se completa.\n  return { telefono_norm: '', telefono_tipo: 'invalido' };\n}\n\nreturn items.map((item) => {\n  const fila = { ...item.json };\n  const r = normalizarTelefono(fila.telefono);\n  fila.telefono_norm = r.telefono_norm;\n  fila.telefono_tipo = r.telefono_tipo;\n  return { json: fila };\n});\n"
+      },
+      "id": "n4-telefono",
+      "name": "Normalizar telefono",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F02 - Validacion de CUIL (formato + digito verificador modulo 11).\n//\n// Deriva cuil_norm (11 digitos como string, sin guiones, sin perder ceros) y\n// cuil_valido (booleano). El campo 'cuil' original NO se toca.\n//\n// Modulo 11: pesos 5 4 3 2 7 6 5 4 3 2 sobre los primeros 10 digitos.\n//   suma de productos, resto = suma % 11\n//   resto 0 -> DV 0\n//   resto 1 -> INVALIDO   (ver abajo)\n//   si no   -> DV = 11 - resto\n//\n// POR QUE resto 1 -> INVALIDO (decision de Pedro, correccion 2026-07-27):\n// Bajo la regla de AFIP, un CUIL que da resto 1 CON SU PROPIO PREFIJO no puede\n// existir: AFIP lo habria reemitido con prefijo 23. Y la reemision no es una\n// excepcion al algoritmo, es consistente con el: cambiar el prefijo altera el\n// digito que pesa 4 y el resto deja de ser 1. Verificado por fuerza bruta:\n// 27272/27272 reemisiones femeninas (23-DNI-4) y 27273/27273 masculinas\n// (23-DNI-9) validan con ESTE mismo algoritmo simple. O sea: los CUIL reemitidos\n// pasan bien; no hay que modelar sexo ni prefijos. Aceptar resto 1 como DV 9\n// solo crearia una colision (DV 9 sale de resto 1 y de resto 2) que debilita el\n// verificador. Por eso resto 1 se rechaza.\n//\n// Prefijos validos: 20 23 24 27 (persona fisica); 30 33 34 (juridica).\n// Formato correcto + DV incorrecto = INVALIDO. No hay estado intermedio.\n// Funcion pura.\n\nconst PREFIJOS = new Set(['20', '23', '24', '27', '30', '33', '34']);\nconst PESOS = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];\n\nfunction validarCuil(raw) {\n  const norm = (raw === undefined || raw === null ? '' : String(raw)).replace(/\\D/g, '');\n  if (norm.length !== 11) return { cuil_norm: norm, cuil_valido: false, cuil_dudoso: false };\n  if (!PREFIJOS.has(norm.slice(0, 2))) return { cuil_norm: norm, cuil_valido: false, cuil_dudoso: false };\n\n  let suma = 0;\n  for (let i = 0; i < 10; i++) suma += Number(norm[i]) * PESOS[i];\n  const resto = suma % 11;\n\n  // cuil_dudoso: el CUIL da resto 1 con su propio prefijo -> RECHAZADO. AFIP lo\n  // habria reemitido con prefijo 23. Se marca para que el rechazo sea auditable.\n  if (resto === 1) {\n    return { cuil_norm: norm, cuil_valido: false, cuil_dudoso: true };\n  }\n\n  const dv = resto === 0 ? 0 : 11 - resto;\n  return { cuil_norm: norm, cuil_valido: dv === Number(norm[10]), cuil_dudoso: false };\n}\n\nreturn items.map((item) => {\n  const fila = { ...item.json };\n  const r = validarCuil(fila.cuil);\n  fila.cuil_norm = r.cuil_norm;\n  fila.cuil_valido = r.cuil_valido;\n  fila.cuil_dudoso = r.cuil_dudoso;\n  return { json: fila };\n});\n"
+      },
+      "id": "n5-cuil",
+      "name": "Validar CUIL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F03 - Deduplicacion. NADA se borra: un duplicado es una etiqueta, no un delete.\n//\n// id_fila estable (posicion original, 1-based). Deriva telefono_match,\n// es_duplicado, duplicado_de, motivo_duplicado. F01 (telefono_norm) y F02 no se\n// recalculan; solo el telefono_tipo del GANADOR puede adoptar un tipo mas\n// especifico de su linea (ver ADOPCION abajo).\n//\n// CLAVE DE MATCH (decision de Pedro, ver ESTADO): se agrupa por los ULTIMOS 10\n// DIGITOS NACIONALES -> telefono_match, ignorando el 9 del celular. En AMBA un\n// mismo 11-XXXX-XXXX es una sola linea; el 9 indica el TIPO, no la identidad.\n// Asi un celular (+549...) y el mismo numero escrito pelado (ambiguo) colapsan.\n// Los invalidos tienen telefono_norm vacio -> telefono_match vacio -> NO agrupan\n// entre si (el bug mas caro de la fase seria un grupo falso de 82).\n//\n// Identidad: misma fila si comparten cuil_norm (no vacio) O telefono_match (no\n// vacio). union-find -> UN ganador por componente, sin cadenas A->B->C.\n//\n// Ganador (regla 3): fecha_carga mas reciente; si empata, mas campos ORIGINALES\n// completos; si empata, primero del archivo (id_fila menor). Reproducible.\n//\n// ADOPCION DE TIPO: el ganador adopta el telefono_tipo mas especifico presente\n// en su MISMA linea (mismo telefono_match), precedencia celular > fijo > ambiguo.\n// Si el ganador vino 'ambiguo' pero otro de su linea era 'celular', queda\n// 'celular'. El telefono original queda intacto: el tipo por-fila de F01 siempre\n// se puede recomputar.\n\nconst ORIG = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga'];\nconst PREC = { celular: 3, fijo: 2, ambiguo: 1, invalido: 0, '': 0 };\n\nfunction matchTel(norm) {\n  const d = String(norm === undefined || norm === null ? '' : norm).replace(/\\D/g, '');\n  return d.length >= 10 ? d.slice(-10) : '';\n}\n\nconst filas = items.map((item, i) => {\n  const json = Object.assign({}, item.json);\n  json.telefono_match = matchTel(json.telefono_norm);\n  return { json: json, i: i, id_fila: i + 1 };\n});\n\n// --- union-find ---\nconst padre = filas.map((_, i) => i);\nfunction find(x) { while (padre[x] !== x) { padre[x] = padre[padre[x]]; x = padre[x]; } return x; }\nfunction unir(a, b) { const ra = find(a), rb = find(b); if (ra !== rb) padre[ra] = rb; }\n\nfunction agrupar(campo) {\n  const m = new Map();\n  filas.forEach((f) => {\n    const v = String(f.json[campo] === undefined || f.json[campo] === null ? '' : f.json[campo]).trim();\n    if (v === '') return;                 // vacio no agrupa\n    if (!m.has(v)) m.set(v, []);\n    m.get(v).push(f.i);\n  });\n  m.forEach((idxs) => { for (let k = 1; k < idxs.length; k++) unir(idxs[0], idxs[k]); });\n}\nagrupar('cuil_norm');\nagrupar('telefono_match');\n\n// --- componentes ---\nconst comp = new Map();\nfilas.forEach((f) => { const r = find(f.i); if (!comp.has(r)) comp.set(r, []); comp.get(r).push(f.i); });\n\nfunction completo(json) {\n  return ORIG.reduce((n, c) => n + (String(json[c] === undefined || json[c] === null ? '' : json[c]).trim() !== '' ? 1 : 0), 0);\n}\n\nfunction ganador(idxs) {\n  return idxs.reduce((best, i) => {\n    const a = filas[i].json, b = filas[best].json;\n    const fa = String(a.fecha_carga || ''), fb = String(b.fecha_carga || '');\n    if (fa !== fb) return fa > fb ? i : best;          // ISO YYYY-MM-DD: lexicografico = cronologico\n    const ca = completo(a), cb = completo(b);\n    if (ca !== cb) return ca > cb ? i : best;\n    return filas[i].id_fila < filas[best].id_fila ? i : best;\n  }, idxs[0]);\n}\n\n// --- marcar (sin reordenar: el orden original tiene que sobrevivir) ---\nconst salida = filas.map((f) => ({\n  json: Object.assign({}, f.json, {\n    id_fila: f.id_fila, es_duplicado: false, duplicado_de: '', motivo_duplicado: '',\n  }),\n}));\n\ncomp.forEach((idxs) => {\n  if (idxs.length < 2) return;\n  const g = ganador(idxs);\n  const idGanador = filas[g].id_fila;\n  const cuilG = String(filas[g].json.cuil_norm || '').trim();\n  const matchG = String(filas[g].json.telefono_match || '').trim();\n\n  // ADOPCION de tipo: el mas especifico en la misma linea del ganador.\n  if (matchG !== '') {\n    let mejor = filas[g].json.telefono_tipo || '';\n    idxs.forEach((i) => {\n      if (String(filas[i].json.telefono_match || '').trim() !== matchG) return;\n      const t = filas[i].json.telefono_tipo || '';\n      if ((PREC[t] || 0) > (PREC[mejor] || 0)) mejor = t;\n    });\n    salida[g].json.telefono_tipo = mejor;\n  }\n\n  idxs.forEach((i) => {\n    if (i === g) return;\n    const motivos = [];\n    if (cuilG !== '' && String(filas[i].json.cuil_norm || '').trim() === cuilG) motivos.push('cuil');\n    if (matchG !== '' && String(filas[i].json.telefono_match || '').trim() === matchG) motivos.push('telefono');\n    salida[i].json.es_duplicado = true;\n    salida[i].json.duplicado_de = idGanador;\n    salida[i].json.motivo_duplicado = motivos.length ? motivos.join('+') : 'transitivo';\n  });\n});\n\nreturn salida;\n"
+      },
+      "id": "n6-dedup",
+      "name": "Marcar duplicados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F04 - Completitud y cobertura.\n//\n// Marca contactos no llamables por dato y contactos fuera de la zona de\n// cobertura. Cada marca deja un MOTIVO en castellano legible (lo lee un\n// supervisor de call center, no un dev). Un contacto acumula TODOS sus motivos.\n//\n// CONFIG es el PARAMETRO del workflow: el unico lugar donde se cambia la zona.\n// La zona de hoy es un ESCENARIO DE DEMO, no un cliente real (ver ESTADO). El\n// proximo cliente cambia esta lista y NO se toca la logica de abajo.\n\nconst CONFIG = {\n  // Localidades EN ZONA (cobertura). Se comparan normalizadas: sin tildes,\n  // minusculas, sin espacios de mas. 'Moron', 'moron' y 'MORON' son la misma.\n  zona: [\n    'Castelar', 'Haedo', 'Moron', 'Hurlingham', 'Ituzaingo', 'Ramos Mejia',\n    'Villa Luzuriaga', 'San Justo',\n  ],\n};\n\nfunction normLoc(s) {\n  return String(s === undefined || s === null ? '' : s)\n    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')   // saca tildes/diacriticos\n    .toLowerCase().trim().replace(/\\s+/g, ' ');\n}\n\nconst zonaSet = new Set(CONFIG.zona.map(normLoc));\n\nreturn items.map((item) => {\n  const json = Object.assign({}, item.json);\n  const motivos = [];\n\n  // Datos insuficientes (hecho del archivo).\n  if (json.telefono_tipo === 'invalido') motivos.push('sin teléfono utilizable');\n  const nombre = String(json.nombre === undefined || json.nombre === null ? '' : json.nombre).trim();\n  if (nombre === '') motivos.push('sin nombre');\n\n  // Fuera de cobertura (suposicion nuestra: la zona). Separado a proposito.\n  const enZona = zonaSet.has(normLoc(json.localidad));\n  if (!enZona) motivos.push('fuera de zona de cobertura');\n\n  json.en_zona = enZona;\n  json.marcado = motivos.length > 0;\n  json.motivo_descarte = motivos.join('; ');\n  return { json: json };\n});\n"
+      },
+      "id": "n7-cobertura",
+      "name": "Completitud y cobertura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F05 - Antiguedad del lead.\n//\n// Deriva dias_antiguedad, frescura, motivo_frescura, fecha_corte_usada.\n//\n// CONFIG.fecha_corte: si viene vacio, se usa la fecha del dia (new Date() SOLO\n// para fijar el default en CONFIG, NUNCA dentro de la logica de calculo). La\n// fecha efectiva se escribe en fecha_corte_usada para que el CSV sea auditable\n// sin saber que dia se genero.\n//\n// Formatos aceptados para fecha_carga:\n//   aaaa-mm-dd   (ISO)\n//   dd/mm/aaaa   (dia primero, Argentina)\n// Se marca 'fecha ambigua' cuando ambos componentes del dd/mm son <= 12 (la\n// lectura inversa tambien seria fecha valida). No se adivinan meses en texto ni\n// anos de 2 digitos: todo lo demas es 'fecha ilegible'.\n//\n// Tramos:\n//   0 a 15 dias  -> alta\n//   16 a 45 dias -> media\n//   46 a 90 dias -> baja\n//   mas de 90    -> fria\n//   no parseable / futuro -> sin dato\n//\n// Todas las fechas se construyen con Date.UTC para evitar un bug de DST:\n// new Date(y, m-1, d) usa hora local, y si el tramo cruza un cambio de horario\n// (en otra zona; Argentina no tiene DST desde 2009) Math.floor pierde una hora\n// y un contacto salta de tramo. Date.UTC elimina el problema.\n//\n// dias_antiguedad: el numero real de dias (puede ser negativo para fechas\n// futuras). Vacio si la fecha no se puede parsear (nunca -1: un -1 seria \"mas\n// fresco que 0 dias\" para cualquier aritmetica aguas abajo).\n//\n// Funcion pura.\n\nconst CONFIG = {\n  fecha_corte: '2026-07-28',\n};\n\nconst _corte_str = CONFIG.fecha_corte || new Date().toISOString().slice(0, 10);\n\nfunction parseFechaUTC(s) {\n  const t = String(s === undefined || s === null ? '' : s).trim();\n  if (t === '') return { fecha: null, motivos: ['fecha vacia'] };\n\n  let y, m, d;\n  let ambigua = false;\n\n  const iso = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(t);\n  if (iso) {\n    y = Number(iso[1]); m = Number(iso[2]); d = Number(iso[3]);\n  } else {\n    const dmy = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(t);\n    if (dmy) {\n      d = Number(dmy[1]); m = Number(dmy[2]); y = Number(dmy[3]);\n      if (d <= 12 && m <= 12) ambigua = true;\n    } else {\n      return { fecha: null, motivos: ['fecha ilegible'] };\n    }\n  }\n\n  const dt = new Date(Date.UTC(y, m - 1, d));\n  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) {\n    return { fecha: null, motivos: ['fecha ilegible'] };\n  }\n\n  const motivos = [];\n  if (ambigua) motivos.push('fecha ambigua');\n  return { fecha: dt, motivos: motivos };\n}\n\nconst _corteR = parseFechaUTC(_corte_str);\nif (!_corteR.fecha) throw new Error('CONFIG.fecha_corte invalida: ' + _corte_str);\nconst corte = _corteR.fecha;\n\nfunction tramo(dias) {\n  if (dias <= 15) return 'alta';\n  if (dias <= 45) return 'media';\n  if (dias <= 90) return 'baja';\n  return 'fria';\n}\n\nreturn items.map((item) => {\n  const json = Object.assign({}, item.json);\n  const r = parseFechaUTC(json.fecha_carga);\n\n  json.fecha_corte_usada = _corte_str;\n\n  if (r.fecha === null) {\n    json.dias_antiguedad = '';\n    json.frescura = 'sin dato';\n    json.motivo_frescura = r.motivos.join('; ');\n  } else {\n    const diff = Math.floor((corte - r.fecha) / 86400000);\n    json.dias_antiguedad = diff;\n\n    const motivos = r.motivos.slice();\n    if (diff < 0) {\n      motivos.push('fecha futura');\n      json.frescura = 'sin dato';\n    } else {\n      json.frescura = tramo(diff);\n    }\n    json.motivo_frescura = motivos.join('; ');\n  }\n\n  return { json: json };\n});\n"
+      },
+      "id": "n8-antiguedad",
+      "name": "Antiguedad del lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F12 - Persona fisica vs. juridica (filtro 8 del catalogo, Nivel 1).\n//\n// Deriva tipo_persona (fisica | juridica | desconocida) del PREFIJO de\n// cuil_norm, que F02 ya calculo. No consulta ninguna fuente externa: sale\n// gratis del dato que ya esta en la lista.\n//\n// CONFIG viene de config/segmentacion.json, embebido al GENERAR el workflow\n// (mismo patron que el mapeo de F11: cambiar de cliente es editar un JSON y\n// regenerar, nunca editar JavaScript).\n//\n// EL DEFAULT DEL REPO ESTA APAGADO: {etiquetar:false, descartar:null}. Con esa\n// config este nodo devuelve los items TAL CUAL, sin agregar ni una clave. Por\n// eso sumarlo al pipeline no mueve el golden de F09 ni un byte. La segmentacion\n// es una decision comercial de UN cliente, no del producto.\n//\n// Cuatro reglas que no se negocian:\n//   1. Se clasifica por PREFIJO, aunque el DV sea invalido. Una empresa\n//      30-... con un typo en el digito verificador sigue siendo juridica.\n//      'desconocida' es solo cuando NO HAY prefijo utilizable (sin CUIL, CUIL\n//      corto, prefijo fuera del set). Que el DV falle es otra cosa: para eso\n//      esta cuil_valido.\n//   2. 'desconocida' NUNCA se descarta. No saber que es no es motivo para\n//      tirarlo: seria el error de \"sin dato = fuera\" que F04 ya tiene medido\n//      (T21). Solo se descarta el tipo EXPLICITO que pida la config.\n//   3. Descartar = marcar con motivo legible, NUNCA borrar la fila (regla 4\n//      del CLAUDE.md, regla 1 del catalogo).\n//   4. tipo_persona no suma ni resta puntaje. El unico efecto sobre el score\n//      es el descarte directo, y solo cuando la config lo pide. El puntaje de\n//      una lista sin segmentar y el de la misma lista etiquetada son iguales.\n//\n// Funcion pura.\n\nconst CONFIG = {\"etiquetar\": false, \"descartar\": null};\n\nconst FISICA = new Set(['20', '23', '24', '27']);\nconst JURIDICA = new Set(['30', '33', '34']);\nconst ETIQUETA = { fisica: 'persona física', juridica: 'persona jurídica' };\n\nfunction tipoPersona(cuilNorm) {\n  const d = String(cuilNorm === undefined || cuilNorm === null ? '' : cuilNorm).replace(/\\D/g, '');\n  if (d.length !== 11) return 'desconocida';\n  const pre = d.slice(0, 2);\n  if (FISICA.has(pre)) return 'fisica';\n  if (JURIDICA.has(pre)) return 'juridica';\n  return 'desconocida';\n}\n\nconst etiquetar = CONFIG.etiquetar === true;\n// Solo estos dos valores descartan. Cualquier otra cosa (incluido\n// 'desconocida') no descarta a nadie; el generador ademas la rechaza antes.\nconst descartar = (CONFIG.descartar === 'fisica' || CONFIG.descartar === 'juridica')\n  ? CONFIG.descartar : null;\n\n// Config apagada: el nodo es transparente. Ni una clave nueva, ni un byte.\nif (!etiquetar && descartar === null) {\n  return items;\n}\n\nreturn items.map((item) => {\n  const json = Object.assign({}, item.json);\n  const tipo = tipoPersona(json.cuil_norm);\n\n  if (etiquetar) json.tipo_persona = tipo;\n\n  if (descartar !== null && tipo === descartar) {\n    json.descarte_segmento = true;\n    json.motivo_segmento = ETIQUETA[tipo] + ' (segmento no buscado)';\n  }\n  return { json: json };\n});\n"
+      },
+      "id": "n8b-persona",
+      "name": "Persona física o jurídica",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F06 - Puntaje explicable.\n//\n// Asigna puntaje, prioridad y motivo a cada contacto. Cada regla deja su\n// contribucion en el motivo; sumar los puntos del motivo da exactamente el\n// puntaje. Es la prueba de que el score se puede auditar.\n//\n// Descartes directos: telefono invalido, fuera de zona, duplicado.\n// Fuerzan prioridad = descartado independientemente del puntaje numerico.\n//\n// CONFIG es el unico lugar donde viven los pesos y umbrales. Cambiar la\n// estrategia comercial no requiere tocar la logica de abajo.\n// Funcion pura.\n\nconst CONFIG = {\n  pesos: {\n    telefono: { celular: 30, fijo: 10, ambiguo: 18 },\n    cuil: { valido: 15, invalido: -10 },\n    zona: 20,\n    frescura: { alta: 25, media: 15, baja: 5, fria: 0, 'sin dato': 0 },\n    origen: {\n      referido: 15,\n      'formulario web': 10,\n      evento: 10,\n      'campaña Meta': 5,\n      'base propia': 0,\n    },\n  },\n  umbrales: { alta: 70, media: 40 },\n};\n\nfunction fmt(n) {\n  return n >= 0 ? '+' + n : String(n);\n}\n\nfunction toBool(v) {\n  if (typeof v === 'boolean') return v;\n  return String(v === undefined || v === null ? '' : v).trim().toUpperCase() === 'TRUE';\n}\n\nreturn items.map((item) => {\n  const json = Object.assign({}, item.json);\n  let score = 0;\n  const partes = [];\n  let descarte = false;\n\n  // 1. Telefono\n  const tipo = String(json.telefono_tipo || '').trim();\n  if (CONFIG.pesos.telefono.hasOwnProperty(tipo)) {\n    const pts = CONFIG.pesos.telefono[tipo];\n    score += pts;\n    partes.push(tipo + ' ' + fmt(pts));\n  } else {\n    partes.push('sin teléfono ' + fmt(0) + ' \\u2192 descarte');\n    descarte = true;\n  }\n\n  // 2. CUIL\n  if (toBool(json.cuil_valido)) {\n    score += CONFIG.pesos.cuil.valido;\n    partes.push('cuil válido ' + fmt(CONFIG.pesos.cuil.valido));\n  } else {\n    score += CONFIG.pesos.cuil.invalido;\n    partes.push('cuil inválido ' + fmt(CONFIG.pesos.cuil.invalido));\n  }\n\n  // 3. Zona\n  if (toBool(json.en_zona)) {\n    score += CONFIG.pesos.zona;\n    partes.push('en zona ' + fmt(CONFIG.pesos.zona));\n  } else {\n    partes.push('fuera de zona ' + fmt(0) + ' \\u2192 descarte');\n    descarte = true;\n  }\n\n  // 4. Frescura\n  const fr = String(json.frescura || 'sin dato').trim();\n  const fr_pts = CONFIG.pesos.frescura.hasOwnProperty(fr) ? CONFIG.pesos.frescura[fr] : 0;\n  score += fr_pts;\n  partes.push('frescura ' + fr + ' ' + fmt(fr_pts));\n\n  // 5. Origen\n  const orig = String(json.origen || '').trim();\n  const orig_pts = CONFIG.pesos.origen.hasOwnProperty(orig) ? CONFIG.pesos.origen[orig] : 0;\n  score += orig_pts;\n  partes.push((orig || 'origen desconocido') + ' ' + fmt(orig_pts));\n\n  // 6. Duplicado\n  if (toBool(json.es_duplicado)) {\n    partes.push('duplicado ' + fmt(0) + ' \\u2192 descarte');\n    descarte = true;\n  }\n\n  // 7. Segmento no buscado (F12). La clave descarte_segmento SOLO existe si\n  // config/segmentacion.json pide descartar un tipo de persona. Con el default\n  // del repo (apagado) F12 no la escribe, este bloque no corre y el motivo no\n  // cambia ni un caracter: por eso el golden de F09 no se mueve. El descarte\n  // por segmento vive aca, con los otros descartes directos, para que toda la\n  // decision de prioridad siga estando en un solo nodo.\n  if (toBool(json.descarte_segmento)) {\n    partes.push(String(json.motivo_segmento || 'segmento no buscado') + ' ' + fmt(0) + ' \\u2192 descarte');\n    descarte = true;\n  }\n\n  // Prioridad\n  let prioridad;\n  if (descarte) prioridad = 'descartado';\n  else if (score >= CONFIG.umbrales.alta) prioridad = 'alta';\n  else if (score >= CONFIG.umbrales.media) prioridad = 'media';\n  else prioridad = 'descartado';\n\n  json.puntaje = score;\n  json.prioridad = prioridad;\n  json.motivo = partes.join('; ');\n  return { json: json };\n});\n"
+      },
+      "id": "n9-puntaje",
+      "name": "Puntaje explicable",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F07 - Ordenamiento.\n// Clave de 4 partes: bloque prioridad (alta > media > descartado), puntaje\n// descendente, dias_antiguedad ascendente (vacios al final), id_fila.\n// El sort de V8 (Node 18+) es estable; id_fila garantiza determinismo total.\n\nconst PRIORIDAD_ORDEN = { alta: 0, media: 1, descartado: 2 };\n\nitems.sort((a, b) => {\n  const ja = a.json, jb = b.json;\n\n  const pa = PRIORIDAD_ORDEN[ja.prioridad] !== undefined ? PRIORIDAD_ORDEN[ja.prioridad] : 2;\n  const pb = PRIORIDAD_ORDEN[jb.prioridad] !== undefined ? PRIORIDAD_ORDEN[jb.prioridad] : 2;\n  if (pa !== pb) return pa - pb;\n\n  const sa = Number(ja.puntaje);\n  const sb = Number(jb.puntaje);\n  if (sa !== sb) return sb - sa;\n\n  const daRaw = ja.dias_antiguedad;\n  const dbRaw = jb.dias_antiguedad;\n  const da = (daRaw === '' || daRaw === undefined || daRaw === null) ? Infinity : Number(daRaw);\n  const db = (dbRaw === '' || dbRaw === undefined || dbRaw === null) ? Infinity : Number(dbRaw);\n  if (da !== db) return da - db;\n\n  return Number(ja.id_fila) - Number(jb.id_fila);\n});\n\nreturn items;\n"
+      },
+      "id": "nA-ordenar",
+      "name": "Ordenar por prioridad y puntaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F07 - Genera CSV comercial con BOM UTF-8.\n// 9 columnas: 6 originales + puntaje, prioridad, motivo.\n// Genera el CSV a mano para controlar BOM y line endings (\\n, no CRLF).\n\nconst COLS = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga',\n              'puntaje', 'prioridad', 'motivo'];\n\nfunction esc(v) {\n  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';\n  const s = String(v === undefined || v === null ? '' : v);\n  if (s.indexOf(',') >= 0 || s.indexOf('\"') >= 0 || s.indexOf('\\n') >= 0 || s.indexOf('\\r') >= 0) {\n    return '\"' + s.replace(/\"/g, '\"\"') + '\"';\n  }\n  return s;\n}\n\nconst header = COLS.map(esc).join(',');\nconst filas = items.map(item => COLS.map(col => esc(item.json[col])).join(','));\nconst csv = '\\uFEFF' + header + '\\n' + filas.join('\\n') + '\\n';\nconst buf = Buffer.from(csv, 'utf-8');\n\nreturn [{\n  json: {},\n  binary: {\n    data: {\n      data: buf.toString('base64'),\n      mimeType: 'text/csv',\n      fileName: 'comercial.csv',\n    }\n  }\n}];\n"
+      },
+      "id": "nB-comercial",
+      "name": "CSV comercial",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\salidas\\salida_f12_comercial.csv",
+        "options": {}
+      },
+      "id": "nW0-escribir-comercial",
+      "name": "Escribir CSV comercial",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        2800,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// F11 - CSV de auditoria con columnas extra del cliente.\n// Identico a la auditoria de F07 (mismas 26 columnas, mismo orden, mismo\n// escape) MAS las columnas opcionales, al final y ordenadas:\n//   - las que la puerta conservo del archivo del cliente (extra_*)\n//   - advertencia_entrada (F11)\n//   - tipo_persona (F12, solo si la segmentacion esta etiquetando)\n// Ninguna de las tres existe con el CSV canonico y la config por defecto, asi\n// que la salida es byte a byte la de F07 (golden intacto).\n\nconst COLS = [\n  'nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga',\n  'telefono_norm', 'telefono_tipo',\n  'cuil_norm', 'cuil_valido', 'cuil_dudoso',\n  'telefono_match', 'id_fila', 'es_duplicado', 'duplicado_de', 'motivo_duplicado',\n  'en_zona', 'marcado', 'motivo_descarte',\n  'fecha_corte_usada', 'dias_antiguedad', 'frescura', 'motivo_frescura',\n  'puntaje', 'prioridad', 'motivo',\n];\n\nconst OPCIONALES = new Set(['advertencia_entrada', 'tipo_persona']);\n\nconst extras = new Set();\nfor (const item of items) {\n  for (const k of Object.keys(item.json)) {\n    if (k.indexOf('extra_') === 0 || OPCIONALES.has(k)) extras.add(k);\n  }\n}\nconst cols = COLS.concat(Array.from(extras).sort());\n\nfunction esc(v) {\n  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';\n  const s = String(v === undefined || v === null ? '' : v);\n  if (s.indexOf(',') >= 0 || s.indexOf('\"') >= 0 || s.indexOf('\\n') >= 0 || s.indexOf('\\r') >= 0) {\n    return '\"' + s.replace(/\"/g, '\"\"') + '\"';\n  }\n  return s;\n}\n\nconst header = cols.map(esc).join(',');\nconst filas = items.map(item => cols.map(col => esc(item.json[col])).join(','));\nconst csv = '\\uFEFF' + header + '\\n' + filas.join('\\n') + '\\n';\nconst buf = Buffer.from(csv, 'utf-8');\n\nreturn [{\n  json: {},\n  binary: {\n    data: {\n      data: buf.toString('base64'),\n      mimeType: 'text/csv',\n      fileName: 'auditoria.csv',\n    }\n  }\n}];\n"
+      },
+      "id": "nC-auditoria",
+      "name": "CSV auditoría (F11)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "C:\\Users\\pedro\\OneDrive\\Desktop\\anaze\\cosas\\call center\\salidas\\salida_f12_auditoria.csv",
+        "options": {}
+      },
+      "id": "nW1-escribir-auditoria",
+      "name": "Escribir CSV auditoría (F11)",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        2800,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Ejecutar manualmente": {
+      "main": [
+        [
+          {
+            "node": "Leer CSV de disco",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer CSV de disco": {
+      "main": [
+        [
+          {
+            "node": "Puerta de entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Puerta de entrada": {
+      "main": [
+        [
+          {
+            "node": "Ficha de entrada",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reja anti-silencio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ficha de entrada": {
+      "main": [
+        [
+          {
+            "node": "Escribir ficha de entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reja anti-silencio": {
+      "main": [
+        [
+          {
+            "node": "Pasamanos (todo string)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pasamanos (todo string)": {
+      "main": [
+        [
+          {
+            "node": "Normalizar telefono",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar telefono": {
+      "main": [
+        [
+          {
+            "node": "Validar CUIL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar CUIL": {
+      "main": [
+        [
+          {
+            "node": "Marcar duplicados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar duplicados": {
+      "main": [
+        [
+          {
+            "node": "Completitud y cobertura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Completitud y cobertura": {
+      "main": [
+        [
+          {
+            "node": "Antiguedad del lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Antiguedad del lead": {
+      "main": [
+        [
+          {
+            "node": "Persona física o jurídica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persona física o jurídica": {
+      "main": [
+        [
+          {
+            "node": "Puntaje explicable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Puntaje explicable": {
+      "main": [
+        [
+          {
+            "node": "Ordenar por prioridad y puntaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ordenar por prioridad y puntaje": {
+      "main": [
+        [
+          {
+            "node": "CSV comercial",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "CSV auditoría (F11)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CSV comercial": {
+      "main": [
+        [
+          {
+            "node": "Escribir CSV comercial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CSV auditoría (F11)": {
+      "main": [
+        [
+          {
+            "node": "Escribir CSV auditoría (F11)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

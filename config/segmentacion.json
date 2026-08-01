@@ -1,0 +1,7 @@
+{
+  "_comentario": "F12 - Segmentacion persona fisica vs juridica. Este es el DEFAULT del repo y esta APAGADO: con etiquetar=false y descartar=null el nodo de F12 devuelve los items tal cual, sin agregar ni una clave, y la salida del pipeline queda byte a byte identica al golden de F09. Un cliente que segmenta se lleva su propia copia de este archivo.",
+  "_etiquetar": "true agrega la columna tipo_persona (fisica | juridica | desconocida) al CSV de auditoria. No suma ni resta puntaje.",
+  "_descartar": "null | 'fisica' | 'juridica'. Marca ese tipo como descartado, con motivo legible. NUNCA se puede descartar 'desconocida': no saber que es no es motivo para tirar el contacto.",
+  "etiquetar": false,
+  "descartar": null
+}

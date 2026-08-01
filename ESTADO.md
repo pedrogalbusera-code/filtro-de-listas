@@ -16,6 +16,7 @@
 | F09  | Suite de regresión              | **CERRADA (corregida 2026-07-30)** | correr_todo: 10/10 PASA + 3 pendientes OK |
 | F10  | Empaquetado y portfolio         | **CERRADA** | correr_todo: 10/10 PASA, n8n limpio OK, SHA-256 golden OK |
 | F11  | Puerta de entrada               | **CERRADA (commiteada 2026-08-01)** | v11: 70/70 PASA + suite 10/10 + golden intacto |
+| F12  | Persona física vs. jurídica     | **CERRADA** | v12: 102/102 PASA + suite 10/10 + golden intacto |
 
 ## Decisiones pendientes de Pedro
 
@@ -270,6 +271,69 @@ Verificados por `v11_puerta.py` (48/48).
 ---
 
 ## Bitácora
+
+**2026-08-01 — F12 cerrada: persona física vs. jurídica.** Primer filtro nuevo
+de Nivel 1 del catálogo (filtro 8). Etiqueta cada contacto `fisica` /
+`juridica` / `desconocida` por el **prefijo de `cuil_norm`** que F02 ya
+calcula —20/23/24/27 física, 30/33/34 jurídica, sin prefijo utilizable
+desconocida— y permite descartar el tipo que el cliente no busca. No consulta
+ninguna fuente externa: sale gratis del dato que la lista ya trae.
+
+**Está apagado por defecto y esa es la decisión de diseño principal.**
+`config/segmentacion.json` va al repo con `{"etiquetar": false,
+"descartar": null}`; con esa config el nodo devuelve los items tal cual, sin
+agregar ni una clave, y las dos salidas del CSV canónico quedan **byte a byte
+idénticas al golden de F09** (verificado: com=`9a6884603f91...`
+aud=`ae6fcc5f146d...`). Segmentar es la decisión comercial de **un** cliente,
+no del producto.
+
+**Las cuatro reglas que fija la fase:**
+
+1. **Clasifica por prefijo, aunque el DV sea inválido.** Una empresa `30-…` con
+   un typo en el dígito verificador sigue siendo jurídica; que el DV falle ya
+   lo dice `cuil_valido`. Son dos preguntas distintas.
+2. **`desconocida` nunca se descarta.** Sería repetir el error que F04 tiene
+   medido con la localidad vacía (T21): "no sé qué es" no es "sé que no sirve".
+   Pedir `descartar: "desconocida"` **frena el generador** con el motivo escrito.
+3. **Descartar es marcar, no borrar.** Motivo:
+   `persona jurídica (segmento no buscado) +0 → descarte`. Las filas siguen ahí.
+4. **`tipo_persona` no suma ni resta puntaje.** Verificado por proyección: con
+   `{etiquetar:true, descartar:null}`, sacando esa columna la auditoría vuelve a
+   ser el golden celda por celda y el comercial no se movió ni un byte.
+
+**Dónde vive cada cosa:** nodo `n8b-persona` entre F05 y F06 (necesita
+`cuil_norm`, y tiene que llegar antes del puntaje). F12 solo marca
+`descarte_segmento` + `motivo_segmento`; **la decisión de prioridad sigue
+estando en un solo nodo** (F06), junto a los otros tres descartes directos. La
+fase 11 quedó **intacta**: F12 es una entrada nueva en `FASES`
+(`workflows/11-persona.json`), no una modificación de F11, así que
+`v11_puerta.py` sigue verificando exactamente lo que cerró. La columna
+`tipo_persona` sale solo en la auditoría, por el mismo mecanismo de columnas
+opcionales que ya usaban `extra_*` y `advertencia_entrada`.
+
+**Verificador `v12_persona.py`: 102/102 PASA** (4 corridas reales de n8n).
+Esperados escritos a mano desde la tabla de la fase, nunca calculados con la
+lógica del nodo. Dos archivos de entrada:
+
+- **`data/leads_segmento_1.csv`** (11 filas, nuevo). Cubre los **siete**
+  prefijos y los tres bordes que ningún archivo del repo tenía: un `33-…`, un
+  `34-…` y un `30-…` con DV roto. Filas limpias a propósito para que el único
+  descarte posible sea el del segmento: con `descartar:"juridica"` da 4
+  descartadas (las 3 jurídicas + la del DV roto), 4 alta y 3 media — las 3
+  desconocidas pierden 10 puntos por CUIL inválido pero **ninguna se descarta**.
+- **`data/leads_adversario_1.csv`** (48 filas). Contadas a mano: **44 física,
+  1 jurídica (T30), 3 desconocidas** (T23 sin CUIL, T24 de 9 dígitos, T25
+  prefijo 99). El motivo del segmento aparece en una sola fila y es T30.
+
+Suite completa después del cambio: **10/10 PASA**, golden intacto.
+
+**Limitación registrada, no parcheada:** el reporte de F08 **no cuenta los
+descartes por segmento**. Con la segmentación encendida esas filas suman al
+total de descartados pero no aparecen en ninguna de las dos subtablas de
+motivos (el reporte busca "sin teléfono", "fuera de zona" y "duplicado"). Hoy
+no molesta porque la segmentación está apagada y ningún cliente la usa, pero
+**hay que agregarle su fila al reporte antes de vendérsela a alguien**. Está
+anotado en `fases/F12-persona-fisica-juridica.md` y en el catálogo.
 
 **2026-08-01 — F11 commiteada y pusheada; hueco T01–T10 cerrado.** F11 había
 corrido 5 archivos por el nodo real de n8n pero nunca `leads_adversario_1.csv`:
