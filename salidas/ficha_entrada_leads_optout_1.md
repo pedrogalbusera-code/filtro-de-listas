@@ -7,7 +7,7 @@ numeros salen del archivo de origen, no de la salida.
 |-------|-------|
 | Estado | **ACEPTADO** |
 | Archivo | C:\Users\pedro\OneDrive\Desktop\anaze\cosas\call center\data\leads_optout_1.csv |
-| Tamaño | 594 bytes |
+| Tamaño | 593 bytes |
 | Formato | CSV / texto plano |
 | Separador detectado | coma |
 | Encoding | UTF-8 sin BOM |

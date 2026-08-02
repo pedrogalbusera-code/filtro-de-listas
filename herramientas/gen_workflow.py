@@ -139,12 +139,23 @@ JS_NORM_TELEFONO = """function normalizarTelefono(raw) {
     return { telefono_norm: '+549' + nac, telefono_tipo: 'celular' };
   }
 
-  // 0XX 15 XXXX-XXXX -> celular (formato viejo argentino con 15).
-  // Estructura: 0 + area(2-4 dig) + 15 + abonado(8 dig) = 13-15 digitos.
-  if (digitos[0] === '0' && digitos.length >= 13 && digitos.length <= 15) {
+  // Formato viejo argentino con 15 -> celular.
+  // Estructura: [0] + area(2-4 dig) + 15 + abonado(8 dig).
+  //
+  // EL 0 DE SALIDA ES OPCIONAL (CORRECCION-F01b): '011 15 6161-7956' y
+  // '11 15 6161 7956' son el mismo celular escrito con y sin el 0. Es la
+  // MISMA rama con el 0 opcional, no una segunda: duplicarla seria la forma
+  // de que las dos variantes se separen con el tiempo.
+  //
+  // No acepta 12 digitos cualesquiera: exige el marcador '15' justo despues
+  // del area. Eso es lo que hace inequivoco al formato — ningun fijo AMBA
+  // tiene 12 digitos (el fijo es 11 XXXX-XXXX, 10), asi que aceptarlo no le
+  // puede robar un fijo a nadie.
+  const cuerpo15 = digitos[0] === '0' ? digitos.slice(1) : digitos;
+  if (cuerpo15.length >= 12 && cuerpo15.length <= 14) {
     for (let areaLen = 2; areaLen <= 4; areaLen++) {
-      const area = digitos.slice(1, 1 + areaLen);
-      const resto = digitos.slice(1 + areaLen);
+      const area = cuerpo15.slice(0, areaLen);
+      const resto = cuerpo15.slice(areaLen);
       if (resto.startsWith('15') && resto.length === 10) {
         const abonado = resto.slice(2);
         return { telefono_norm: '+549' + area + abonado, telefono_tipo: 'celular' };

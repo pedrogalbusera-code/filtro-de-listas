@@ -93,11 +93,15 @@ def esperado(raw):
         nac = digitos[3:]
         return ("+549" + nac, "celular")
 
-    # 0XX 15 XXXX-XXXX -> celular (formato viejo con 15)
-    if digitos and digitos[0] == "0" and 13 <= len(digitos) <= 15:
+    # [0] + area + 15 + abonado -> celular (formato viejo con 15).
+    # El 0 de salida es OPCIONAL (CORRECCION-F01b): '11 15 6161 7956' es el
+    # mismo celular que '011 15 6161-7956'. Exige el marcador '15' despues del
+    # area: no acepta 12 digitos cualesquiera.
+    cuerpo15 = digitos[1:] if digitos and digitos[0] == "0" else digitos
+    if 12 <= len(cuerpo15) <= 14:
         for area_len in range(2, 5):
-            area = digitos[1:1 + area_len]
-            resto = digitos[1 + area_len:]
+            area = cuerpo15[:area_len]
+            resto = cuerpo15[area_len:]
             if resto.startswith("15") and len(resto) == 10:
                 abonado = resto[2:]
                 return ("+549" + area + abonado, "celular")
@@ -309,6 +313,52 @@ def main():
         norm_r, tipo_r = esperado(entrada)
         check(
             f"{tag} {entrada!r} -> {tipo_e}",
+            tipo_r == tipo_e and norm_r == norm_e,
+            f"oraculo=({norm_r!r},{tipo_r})",
+        )
+
+    # --- CORRECCION-F01b: el 15 sin el 0 inicial ---
+    # Las tres formas del MISMO celular tienen que dar el MISMO canonico. La
+    # del medio es la que se agrega en esta correccion (antes daba invalido:
+    # 12 digitos que no matcheaban ningun patron).
+    tres_formas = [
+        ("con 0", "011 15 6161-7956"),
+        ("sin 0", "11 15 6161 7956"),
+        ("internacional", "+54 9 11 6161-7956"),
+    ]
+    resultados = [(etq, esperado(ent)) for etq, ent in tres_formas]
+    check(
+        "el 15 con 0, sin 0 y el +549 dan el MISMO canonico celular",
+        all(r == ("+5491161617956", "celular") for _, r in resultados),
+        str(resultados),
+    )
+
+    # El canonico conserva el 9: un fijo con los mismos digitos NO colisiona
+    # (no se come el 15 como si fueran digitos del numero).
+    cel_15 = esperado("11 15 6161 7956")
+    fijo_mismo = esperado("011-61617956")
+    check(
+        "el celular con 15 y el fijo de los mismos digitos dan canonicos DISTINTOS",
+        cel_15 == ("+5491161617956", "celular")
+        and fijo_mismo == ("+541161617956", "fijo")
+        and cel_15[0] != fijo_mismo[0],
+        f"celular={cel_15} fijo={fijo_mismo}",
+    )
+
+    # No se acepta cualquier cosa de 12 digitos: sin el marcador 15 despues
+    # del area, sigue siendo invalido.
+    CASOS_F01B = [
+        ("15sin0", "11 15 6161 7956", "celular", "+5491161617956"),
+        ("15sin0-pegado", "111561617956", "celular", "+5491161617956"),
+        ("15sin0-area3", "221 15 6161 7956", "celular", "+54922161617956"),
+        ("12dig-sin-15", "11 1234 567890", "invalido", ""),
+        ("12dig-sin-15b", "111234567890", "invalido", ""),
+        ("13dig-basura", "1112345678901", "invalido", ""),
+    ]
+    for tag, entrada, tipo_e, norm_e in CASOS_F01B:
+        norm_r, tipo_r = esperado(entrada)
+        check(
+            f"F01b {tag} {entrada!r} -> {tipo_e}",
             tipo_r == tipo_e and norm_r == norm_e,
             f"oraculo=({norm_r!r},{tipo_r})",
         )

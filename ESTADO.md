@@ -20,6 +20,7 @@
 | F13  | Números y nombres basura        | **CERRADA** | v13: 53/53 PASA + suite 10/10 + golden y reporte intactos |
 | F14  | Lista negra / opt-out           | **CERRADA (endurecida 2026-08-02)** | v14: 95/95 PASA (con baja .xlsx) + suite 10/10 |
 | —    | CORRECCION-F11                  | **CERRADA** | v11: 72/72 PASA (ficha del rechazo blindada) |
+| —    | CORRECCION-F01b                 | **CERRADA** | v01: 50/50 PASA (el `15` sin el `0`) |
 
 ## Decisiones pendientes de Pedro
 
@@ -274,6 +275,52 @@ Verificados por `v11_puerta.py` (48/48).
 ---
 
 ## Bitácora
+
+**2026-08-02 — CORRECCION-F01b: el celular con `15` sin el `0` inicial.** F01
+reconocía el formato viejo con `15` **solo con el 0** (`011 15 6161-7956`); sin
+él son 12 dígitos que no matcheaban ningún patrón y caían en `invalido`. Salió a
+la luz en F14, donde el spec pedía O02 como `11 15 6161 7956` y hubo que ajustar
+el dato para no tocar F01.
+
+**Paso 1 — el conteo, medido ANTES de tocar el normalizador.** Filas que hoy dan
+`invalido` y que con la regla nueva pasarían a celular válido (patrón: 12 dígitos
+que empiezan en `1115`, con o sin separadores):
+
+| Archivo | Filas | Afectadas |
+|---------|-------|-----------|
+| `leads_prueba_SINTETICO_1.csv` | 200 | **0** |
+| `leads_adversario_1.csv` | 48 | 0 |
+| `leads_adversario_2.csv` (header línea 4) | 7 | 0 |
+| `leads_adversario_3.csv` | 5 | 0 |
+| `leads_basura_1.csv` / `leads_segmento_1.csv` | 7 / 11 | 0 / 0 |
+| `leads_optout_1.csv` / `lista_baja_1.csv` | 7 / 7 | 0 / 0 |
+| `leads_adversario_4.xlsx` / `lista_baja_1.xlsx` | — | 0 / 0 |
+
+**Decisión sobre el golden: intacto, y no hubo que decidir nada.** Con 0 filas
+afectadas en las 200 canónicas, la corrección es **puramente aditiva** —es la
+rama del prompt que no requiere regenerar nada—. Los dos SHA-256 siguen en
+`9a6884603f91…` y `ae6fcc5f146d…`, y la suite en 10/10. Si el conteo hubiera dado
+> 0, el golden se habría movido con razón y había que frenar; no fue el caso.
+
+**El cambio:** en `JS_NORM_TELEFONO` (factorizado en F14, así que lo consume todo
+el pipeline) el `0` de salida pasó a ser **opcional en la misma rama**, no una
+segunda: duplicarla sería la forma de que las dos variantes se separen con el
+tiempo. Sigue exigiendo el marcador `15` justo después del área, así que **no
+acepta 12 dígitos cualesquiera**. Es seguro porque ningún fijo AMBA tiene 12
+dígitos (el fijo es `11 XXXX-XXXX`, 10): aceptarlo no le puede robar un fijo a
+nadie.
+
+**Cómo quedó cubierto, y por qué no alcanzaba con el oráculo.** `v01_telefono.py`
+subió de **42 a 50 checks**: las tres formas del mismo celular
+(`011 15 …` / `11 15 …` / `+54 9 11 …`) dan el mismo canónico, el fijo de los
+mismos dígitos da uno **distinto** (conserva el `9`), y tres negativos de 12-13
+dígitos **sin** el marcador `15` siguen en `invalido`. Pero eso es todo oráculo
+Python — la trampa que `prompts/README.md` llama "el caso trampa probado contra
+el oráculo y no contra n8n". Por eso **se revirtió O02 de `leads_optout_1.csv` a
+`11 15 6161 7956`**, la forma que pedía el spec original de F14: ahora el caso
+O02 (opt-out por teléfono, cruzando contra `+54 9 11 6161 7956` de la lista de
+baja) **es la prueba de punta a punta del formato nuevo por el nodo real de
+n8n**. El desvío que F14 había dejado anotado queda cerrado.
 
 **2026-08-02 — CORRECCION-F11: la puerta endurecida tras la factorización.**
 Dos ítems aditivos: ninguno cambia comportamiento y el golden no se movió.

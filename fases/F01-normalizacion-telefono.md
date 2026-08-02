@@ -49,5 +49,22 @@ Se marcan `ambiguo` y se les da un puntaje intermedio en F06. **No se adivina.**
 cinco formatos, el caso de colisión fijo/celular y al menos un borde por rama),
 más el conteo 118/82 sobre los 200 items reales.
 
+## Formatos agregados después del cierre
+
+La fase cerró con los 5 formatos del CSV de prueba. Dos correcciones posteriores
+ampliaron el normalizador **sin mover el golden** (los formatos nuevos no están
+en el archivo canónico):
+
+- **`CORRECCION-F01`** — internacional con y sin `+`, el `9` separado por
+  espacios, el formato viejo con `15`, artefactos de Excel (`.0`, notación
+  científica) y celdas con dos teléfonos. Y el arreglo que más importaba:
+  `15-4161-7956` **sin código de área** pasó de `ambiguo` con un número
+  inventado a `invalido`.
+- **`CORRECCION-F01b`** — el `0` de salida del formato con `15` es **opcional**:
+  `11 15 6161 7956` es el mismo celular que `011 15 6161-7956` y que
+  `+54 9 11 6161-7956`. Los tres dan `+5491161617956`. Sigue exigiendo el
+  marcador `15` después del área: no acepta 12 dígitos cualesquiera. Es seguro
+  porque ningún fijo AMBA tiene 12 dígitos.
+
 ## Fuera de alcance
 Deduplicar. Acá solo se normaliza; comparar es F03.

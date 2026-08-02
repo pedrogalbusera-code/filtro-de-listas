@@ -173,17 +173,18 @@ Lista principal `data/leads_optout_1.csv`:
 O01 y O02 son la prueba de que el cruce corre sobre el canónico y no sobre el string.
 O05 y O06 son las dos trampas de vacío. O04 es el control de que no se matchea de más.
 
-> **Desvío de esta tabla al construirla (2026-08-02).** O02 se escribió
-> `011 15 6161-7956`, **no** `11 15 6161 7956` como decía el borrador. Motivo: el
-> normalizador de F01 reconoce el formato viejo con `15` **solo con el 0 inicial**
-> (`0` + área + `15` + abonado, 13 a 15 dígitos); sin ese 0, `11 15 6161 7956` son
-> 12 dígitos que no caen en ninguna rama y F01 los marca `invalido`. Escrito como
-> estaba, O02 habría quedado descartado por "sin teléfono" y no habría probado
-> nada del cruce. Se eligió respetar F01 —tocar su lógica está prohibido en esta
-> fase— y ajustar el dato de prueba. **Sigue probando exactamente lo que tenía que
-> probar:** el `15` de la principal contra el `+54 9` de la baja, dos formatos
-> distintos que dan el mismo canónico. Si algún día se quiere aceptar el `15` sin
-> el 0 inicial, es una corrección de F01 con su propia sesión.
+> **Desvío que hubo al construirla, y cómo se resolvió.** Al armar F14
+> (2026-08-02), O02 se escribió `011 15 6161-7956` en vez de `11 15 6161 7956`:
+> el normalizador de F01 reconocía el formato viejo con `15` **solo con el 0
+> inicial**, y sin ese 0 son 12 dígitos que caían en `invalido`. Escrito como
+> pedía la tabla, O02 habría quedado descartado por "sin teléfono" sin probar
+> nada del cruce. Se respetó F01 —tocar su lógica estaba prohibido en esa
+> sesión— y se ajustó el dato.
+>
+> **`CORRECCION-F01b` (2026-08-02) cerró el hueco:** el `0` de salida ahora es
+> opcional, y O02 volvió a la forma original `11 15 6161 7956`. Con eso, **el
+> caso O02 de F14 pasa a ser la prueba de punta a punta del formato nuevo por el
+> nodo real de n8n**, no solo por el oráculo Python.
 >
 > Las otras dos parejas quedaron como estaban: O01 `11 4161-7956` contra
 > `011 4161-7956`, y O07 `11 4242-4242` contra `011 4242-4242` — las dos cruzan
