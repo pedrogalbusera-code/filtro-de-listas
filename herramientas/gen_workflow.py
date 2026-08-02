@@ -59,7 +59,7 @@ return items.map((item) => {
 });
 """
 
-JS_F01 = """// F01 - Normalizacion de telefono.
+JS_F01_CABECERA = """// F01 - Normalizacion de telefono.
 //
 // Deriva dos campos nuevos por contacto: telefono_norm (canonico) y
 // telefono_tipo. El campo 'telefono' original NO se toca.
@@ -82,7 +82,16 @@ JS_F01 = """// F01 - Normalizacion de telefono.
 //
 // Funcion pura: mismo input -> mismo output, sin estado externo.
 
-function normalizarTelefono(raw) {
+"""
+
+
+# Factorizado en F14. Antes vivia inline dentro del nodo de F01; ahora es una
+# sola implementacion que usan DOS nodos: el de F01 (sobre la lista principal)
+# y el que arma los sets de la lista de baja (sobre el archivo del cliente).
+# El motivo es el bug que esto evita: un segundo normalizador "parecido" que
+# difiera en un solo formato hace que el cruce de F14 falle EN SILENCIO justo
+# en los formatos raros, que son los que el filtro existe para atrapar.
+JS_NORM_TELEFONO = """function normalizarTelefono(raw) {
   const s = (raw === undefined || raw === null) ? '' : String(raw).trim();
 
   // Notacion cientifica (dano de Excel) -> invalido. Va antes del filtro de
@@ -161,7 +170,10 @@ function normalizarTelefono(raw) {
   // Todo lo demas (truncado de 6, largos raros) -> invalido. No se completa.
   return { telefono_norm: '', telefono_tipo: 'invalido' };
 }
+"""
 
+
+JS_F01_MAP = """
 return items.map((item) => {
   const fila = { ...item.json };
   const r = normalizarTelefono(fila.telefono);
@@ -171,7 +183,9 @@ return items.map((item) => {
 });
 """
 
-JS_F02 = """// F02 - Validacion de CUIL (formato + digito verificador modulo 11).
+JS_F01 = JS_F01_CABECERA + JS_NORM_TELEFONO + JS_F01_MAP
+
+JS_F02_CABECERA = """// F02 - Validacion de CUIL (formato + digito verificador modulo 11).
 //
 // Deriva cuil_norm (11 digitos como string, sin guiones, sin perder ceros) y
 // cuil_valido (booleano). El campo 'cuil' original NO se toca.
@@ -197,7 +211,13 @@ JS_F02 = """// F02 - Validacion de CUIL (formato + digito verificador modulo 11)
 // Formato correcto + DV incorrecto = INVALIDO. No hay estado intermedio.
 // Funcion pura.
 
-const PREFIJOS = new Set(['20', '23', '24', '27', '30', '33', '34']);
+"""
+
+
+# Factorizado en F14, mismo motivo que el normalizador de telefono: el cruce de
+# la lista de baja necesita los MISMOS 11 digitos que produce F02, no una
+# segunda normalizacion parecida.
+JS_NORM_CUIL = """const PREFIJOS = new Set(['20', '23', '24', '27', '30', '33', '34']);
 const PESOS = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
 
 function validarCuil(raw) {
@@ -218,7 +238,10 @@ function validarCuil(raw) {
   const dv = resto === 0 ? 0 : 11 - resto;
   return { cuil_norm: norm, cuil_valido: dv === Number(norm[10]), cuil_dudoso: false };
 }
+"""
 
+
+JS_F02_MAP = """
 return items.map((item) => {
   const fila = { ...item.json };
   const r = validarCuil(fila.cuil);
@@ -228,6 +251,8 @@ return items.map((item) => {
   return { json: fila };
 });
 """
+
+JS_F02 = JS_F02_CABECERA + JS_NORM_CUIL + JS_F02_MAP
 
 
 JS_F03 = """// F03 - Deduplicacion. NADA se borra: un duplicado es una etiqueta, no un delete.
@@ -549,6 +574,16 @@ const CONFIG = {
 // mas larga de un mismo digito en datos reales es 3, contra un umbral de 7.
 const BASURA = __BASURA_JSON__;
 
+// F14 - Lista de baja (opt-out). El gate NO es un booleano: es la PRESENCIA de
+// la segunda lista. Sin --lista-baja el generador deja BAJA en null, no hay
+// nodo que consultar, este bloque no corre y la salida queda byte a byte
+// identica al golden. Con lista, BAJA se resuelve leyendo el nodo de cabeza
+// que ya armo los sets.
+const BAJA = __BAJA_REF__;
+const BAJA_TEL = new Set(BAJA && BAJA.telefonos ? BAJA.telefonos : []);
+const BAJA_CUIL = new Set(BAJA && BAJA.cuils ? BAJA.cuils : []);
+const MOTIVO_OPTOUT = __MOTIVO_OPTOUT__;
+
 const NOMBRES_RELLENO = new Set((BASURA.nombres && BASURA.nombres.relleno ? BASURA.nombres.relleno : []).map(normNombre));
 const SECUENCIAS = new Set(BASURA.telefonos && BASURA.telefonos.secuencias ? BASURA.telefonos.secuencias : []);
 const MIN_IGUALES = (BASURA.telefonos && BASURA.telefonos.min_digitos_iguales_al_final) || 0;
@@ -653,6 +688,28 @@ return items.map((item) => {
   if (toBool(json.descarte_segmento)) {
     partes.push(String(json.motivo_segmento || 'segmento no buscado') + ' ' + fmt(0) + ' \\u2192 descarte');
     descarte = true;
+  }
+
+  // 7b. Opt-out (F14): el titular pidio que no lo llamen. DESCARTE DURO —
+  // llamarlo es exactamente el error que este filtro existe para impedir.
+  //
+  // Cruce por canonico contra canonico, con OR: alcanza teléfono O CUIL,
+  // porque una lista de baja real suele traer solo una de las dos columnas.
+  // Las dos guardas de vacio son criterio duro de la fase: telefono canonico
+  // vacio no cruza (vacio nunca matchea vacio) y un CUIL de menos de 11
+  // digitos no es identidad de nadie. Sin ellas, una lista de baja sucia
+  // barreria contactos inocentes y tampoco se enteraria nadie.
+  if (BAJA_TEL.size || BAJA_CUIL.size) {
+    const telC = String(json.telefono_norm === undefined || json.telefono_norm === null ? '' : json.telefono_norm).trim();
+    const cuilC = String(json.cuil_norm === undefined || json.cuil_norm === null ? '' : json.cuil_norm).replace(/\\D/g, '');
+    const porTel = telC !== '' && BAJA_TEL.has(telC);
+    const porCuil = cuilC.length === 11 && BAJA_CUIL.has(cuilC);
+    if (porTel || porCuil) {
+      // Una sola linea de motivo aunque matcheen las dos vias.
+      partes.push(MOTIVO_OPTOUT + ' ' + fmt(0) + ' \\u2192 descarte');
+      descarte = true;
+      json.optout_via = porTel && porCuil ? 'ambos' : (porTel ? 'telefono' : 'cuil');
+    }
   }
 
   // 8. Nombre de relleno (F13). MARCA, NO descarte: un nombre trucho con un
@@ -878,7 +935,7 @@ let sin_tel = 0, fuera_zona = 0, dup = 0, por_score = 0;
 // siempre y se MUESTRAN solo si hay al menos uno (ver abajo): con la lista
 // canonica los dos dan 0, no aparece ninguna fila nueva y el reporte del
 // golden no cambia ni un caracter.
-let tel_relleno = 0, segmento = 0;
+let tel_relleno = 0, segmento = 0, optout = 0;
 
 for (const item of items) {
   const pri = String(item.json.prioridad || '');
@@ -894,6 +951,7 @@ for (const item of items) {
     if (motivo.indexOf('duplicado') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) dup++;
     if (motivo.indexOf('tel\\u00e9fono de relleno') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) tel_relleno++;
     if (motivo.indexOf('segmento no buscado') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) segmento++;
+    if (motivo.indexOf('opt-out') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) optout++;
     if (motivo.indexOf('\\u2192 descarte') < 0) por_score++;
   }
 }
@@ -955,6 +1013,20 @@ if (segmento > 0) {
   md += '| Tipo de persona que el cliente no busca | ' + segmento + ' |\\n\\n';
 }
 
+// Cuarta categoria. No se mezcla con "segmento" aunque las dos las aporte el
+// cliente: segmento es "no le quiero vender a este tipo" (eleccion comercial),
+// opt-out es "este titular pidio que no lo llamen" (obligacion). Y no se
+// mezcla con calidad de dato: un contacto en baja puede ser un lead perfecto
+// que simplemente NO SE PUEDE llamar; meterlo en "basura que limpiamos"
+// infla el numero equivocado.
+if (optout > 0) {
+  md += '### Por pedido de baja del titular (opt-out)\\n\\n';
+  md += '| Motivo | Contactos |\\n';
+  md += '|--------|-----------|\\n';
+  md += '| En la lista de no llamar que aporta el cliente | ' + optout + ' |\\n\\n';
+  md += '*Se cruza \\u00fanicamente contra la lista que aporta el cliente. **No** se consulta el registro nacional "No Llame" (Ley 26.951) ni ning\\u00fan organismo: eso requiere inscripci\\u00f3n y es otra etapa.*\\n\\n';
+}
+
 md += '*Un contacto puede tener m\\u00e1s de un motivo. La suma de motivos supera el total de descartados.*\\n\\n';
 
 md += '## Ahorro estimado\\n\\n';
@@ -994,7 +1066,7 @@ return [{
 """
 
 
-JS_F11_PUERTA = """// F11 - Puerta de entrada (modo __MODO__).
+JS_F11_PUERTA_CABECERA = """// F11 - Puerta de entrada (modo __MODO__).
 //
 // Todo F00-F10 supone que el archivo es NUESTRO CSV: coma, UTF-8, seis
 // columnas conocidas, encabezado en la fila 1. Este nodo se ocupa del archivo
@@ -1019,7 +1091,23 @@ const SINONIMOS = __SINONIMOS_JSON__;
 const MAPEO = __MAPEO_JSON__;
 
 const CANONICAS = ['nombre', 'cuil', 'telefono', 'localidad', 'origen', 'fecha_carga'];
+"""
 
+
+# Lector de archivos de cliente, factorizado en F14. Lo usan DOS nodos: la
+# puerta de entrada (F11, lista principal) y el que arma los sets de la lista
+# de baja (F14). Son los dos archivos de un cliente y se leen con las MISMAS
+# reglas: separador, encabezado corrido, comillas, encoding.
+#
+# Escribir un segundo lector "parecido" para la lista de baja seria el bug
+# clasico de esta fase: el archivo de baja se lee distinto que el principal,
+# no matchea, y los que pidieron baja se llaman igual. Nadie se entera hasta
+# que llega el reclamo.
+#
+# leerTabla() no sabe nada de columnas canonicas: eso lo decide cada nodo (la
+# puerta exige las 6; la lista de baja se conforma con telefono O cuil). Frena
+# llamando a frenar(), que cada nodo define con su propio mensaje.
+JS_LECTOR = """
 function normNombre(s) {
   return String(s === undefined || s === null ? '' : s)
     .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
@@ -1066,6 +1154,153 @@ function parsearCSV(texto, sep) {
   return registros;
 }
 
+// Archivo de texto -> { encabezados, filas }. Todo lo descriptivo (tamano,
+// encoding, separador, linea del encabezado, salteadas, advertencias) se va
+// escribiendo EN EL OBJETO r que pasa el llamador, a medida que se descubre.
+//
+// Se escribe progresivamente a proposito: si el archivo se rechaza a mitad de
+// camino, la ficha tiene que poder mostrar todo lo que se alcanzo a saber
+// (que pesaba 199 bytes y era UTF-8 sin BOM ya explica bastante). Devolver
+// todo junto al final dejaba la ficha del rechazo en 'n/d'.
+function leerTabla(buf, r) {
+  r.salteadas = r.salteadas || [];
+  r.advertencias = r.advertencias || [];
+  r.filasIncompletas = r.filasIncompletas || [];
+  r.filasVaciasIgnoradas = r.filasVaciasIgnoradas || 0;
+  r.tam = buf.length;
+
+  const conBOM = buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF;
+  const cuerpo = conBOM ? buf.slice(3) : buf;
+  let texto = cuerpo.toString('utf8');
+  if (texto.indexOf('\\uFFFD') >= 0) {
+    // No era UTF-8 valido. Latin-1 mapea todos los bytes: no pierde nada.
+    texto = cuerpo.toString('latin1');
+    r.encoding = 'Latin-1 (no era UTF-8 valido)';
+    r.advertencias.push('el archivo no es UTF-8; se leyo como Latin-1 (revisar tildes en la salida)');
+  } else {
+    r.encoding = conBOM ? 'UTF-8 con BOM' : 'UTF-8 sin BOM';
+  }
+
+  // --- Deteccion de separador ---
+  // Regla de la fase: gana el que produce la MISMA cantidad de campos (>=2)
+  // en al menos el 80% de las primeras 10 lineas no vacias. Refinamientos
+  // (documentados en ESTADO.md):
+  //   - una linea con 1 solo campo no vota (no contiene el separador: es
+  //     titulo/basura, no evidencia en contra) -> el 80% se exige sobre las
+  //     lineas con >=2 campos;
+  //   - pero la moda tiene que aparecer en >=50% del TOTAL de las lineas
+  //     muestreadas, para que un ';' perdido dentro de una celda no gane
+  //     con una sola linea;
+  //   - dos separadores igual de consistentes = ambiguo = rechazo.
+  const lineas = texto.split(/\\r\\n|\\r|\\n/);
+  const muestra = lineas.filter((l) => l.trim() !== '').slice(0, 10);
+  if (muestra.length === 0) frenar('archivo vacio (0 lineas con contenido)', 'un archivo con encabezado y datos');
+
+  const SEPS = [[',', 'coma'], [';', 'punto y coma'], ['\\t', 'tabulador']];
+  const aptos = [];
+  for (const par of SEPS) {
+    const sep = par[0], nombreSep = par[1];
+    const counts = muestra.map((l) => contarCampos(l, sep));
+    const multi = counts.filter((c) => c >= 2);
+    if (!multi.length) continue;
+    const frec = new Map();
+    multi.forEach((c) => frec.set(c, (frec.get(c) || 0) + 1));
+    let moda = 0, fmax = 0;
+    frec.forEach((f, c) => { if (f > fmax) { fmax = f; moda = c; } });
+    const soporteMulti = fmax / multi.length;
+    const soporteTotal = counts.filter((c) => c === moda).length / counts.length;
+    if (soporteMulti >= 0.8 && soporteTotal >= 0.5) {
+      aptos.push({ sep: sep, nombreSep: nombreSep, moda: moda, soporteTotal: soporteTotal });
+    }
+  }
+  if (aptos.length === 0) {
+    frenar(
+      'ningun separador (coma, punto y coma, tabulador) produce una cantidad estable de columnas (>=2) sobre las primeras ' + muestra.length + ' lineas no vacias',
+      'una tabla con separador consistente; esto no parece una tabla'
+    );
+  }
+  aptos.sort((a, b) => b.soporteTotal - a.soporteTotal);
+  if (aptos.length > 1 && aptos[0].soporteTotal === aptos[1].soporteTotal) {
+    frenar(
+      'dos separadores igual de consistentes: ' + aptos[0].nombreSep + ' y ' + aptos[1].nombreSep,
+      'un unico separador dominante; no se adivina'
+    );
+  }
+  const sep = aptos[0].sep;
+  r.separador = aptos[0].nombreSep;
+
+  // --- Parseo completo + encabezado ---
+  const registros = parsearCSV(texto, sep);
+  const esVacio = (reg) => reg.every((c) => String(c).trim() === '');
+
+  const frecCols = new Map();
+  registros.forEach((reg) => {
+    if (esVacio(reg) || reg.length < 2) return;
+    frecCols.set(reg.length, (frecCols.get(reg.length) || 0) + 1);
+  });
+  let modaCols = 0, fcmax = 0;
+  frecCols.forEach((f, c) => { if (f > fcmax) { fcmax = f; modaCols = c; } });
+  if (modaCols < 2) {
+    frenar('una sola columna en un archivo de ' + registros.length + ' lineas', 'al menos 2 columnas');
+  }
+
+  // El encabezado es la primera linea cuya cantidad de campos coincide con
+  // la de la mayoria. Lo de arriba se saltea y se REPORTA, no muere mudo.
+  const headerIdx = registros.findIndex((reg) => !esVacio(reg) && reg.length === modaCols);
+  r.encabezadoLinea = headerIdx + 1;
+  for (let i = 0; i < headerIdx; i++) {
+    const reg = registros[i];
+    r.salteadas.push({
+      linea: i + 1,
+      contenido: esVacio(reg) ? '' : reg.join(sep === '\\t' ? ' ' : sep).slice(0, 80),
+    });
+  }
+  const encabezados = registros[headerIdx].map((c) => String(c).trim());
+  const filas = [];
+
+  for (let i = headerIdx + 1; i < registros.length; i++) {
+    const reg = registros[i];
+    if (esVacio(reg)) { r.filasVaciasIgnoradas++; continue; }
+    let campos = reg.slice();
+    if (campos.length > encabezados.length) {
+      const sobra = campos.slice(encabezados.length);
+      if (sobra.every((c) => String(c).trim() === '')) {
+        campos = campos.slice(0, encabezados.length);
+        r.advertencias.push('linea ' + (i + 1) + ': campos vacios de mas al final, recortados');
+      } else {
+        frenar(
+          'la linea ' + (i + 1) + ' tiene ' + campos.length + ' campos con contenido y el encabezado tiene ' + encabezados.length,
+          'filas con a lo sumo tantos campos como el encabezado'
+        );
+      }
+    }
+    if (campos.length < encabezados.length) {
+      r.filasIncompletas.push(
+        'linea ' + (i + 1) + ': ' + campos.length + ' de ' + encabezados.length + ' campos'
+      );
+      while (campos.length < encabezados.length) campos.push('');
+    }
+    const obj = {};
+    encabezados.forEach((h, j) => { obj[h] = campos[j]; });
+    filas.push(obj);
+  }
+  return { encabezados: encabezados, filas: filas };
+}
+
+// Indice de sinonimos normalizados -> canonica. Lo usan la puerta y la lista
+// de baja para mapear las columnas del cliente sin adivinar por parecido.
+function indexarSinonimos(SINONIMOS) {
+  const idx = {};
+  for (const canon of Object.keys(SINONIMOS)) {
+    if (canon.indexOf('_') === 0) continue;
+    SINONIMOS[canon].forEach((s) => { idx[normNombre(s)] = canon; });
+  }
+  return idx;
+}
+"""
+
+
+JS_F11_PUERTA_CUERPO = """
 const meta = {
   archivo: ARCHIVO,
   tam: null,
@@ -1194,123 +1429,13 @@ try {
       buf = Buffer.from(items[0].binary.data.data, 'base64');
     }
     if (!buf || !buf.length) throw new Error('F11: no llego el archivo binario al nodo Puerta');
-    meta.tam = buf.length;
 
-    const conBOM = buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF;
-    const cuerpo = conBOM ? buf.slice(3) : buf;
-    let texto = cuerpo.toString('utf8');
-    if (texto.indexOf('\\uFFFD') >= 0) {
-      // No era UTF-8 valido. Latin-1 mapea todos los bytes: no pierde nada.
-      texto = cuerpo.toString('latin1');
-      meta.encoding = 'Latin-1 (no era UTF-8 valido)';
-      meta.advertencias.push('el archivo no es UTF-8; se leyo como Latin-1 (revisar tildes en la salida)');
-    } else {
-      meta.encoding = conBOM ? 'UTF-8 con BOM' : 'UTF-8 sin BOM';
-    }
-
-    // --- Deteccion de separador ---
-    // Regla de la fase: gana el que produce la MISMA cantidad de campos (>=2)
-    // en al menos el 80% de las primeras 10 lineas no vacias. Refinamientos
-    // (documentados en ESTADO.md):
-    //   - una linea con 1 solo campo no vota (no contiene el separador: es
-    //     titulo/basura, no evidencia en contra) -> el 80% se exige sobre las
-    //     lineas con >=2 campos;
-    //   - pero la moda tiene que aparecer en >=50% del TOTAL de las lineas
-    //     muestreadas, para que un ';' perdido dentro de una celda no gane
-    //     con una sola linea;
-    //   - dos separadores igual de consistentes = ambiguo = rechazo.
-    const lineas = texto.split(/\\r\\n|\\r|\\n/);
-    const muestra = lineas.filter((l) => l.trim() !== '').slice(0, 10);
-    if (muestra.length === 0) frenar('archivo vacio (0 lineas con contenido)', 'un archivo con encabezado y datos');
-
-    const SEPS = [[',', 'coma'], [';', 'punto y coma'], ['\\t', 'tabulador']];
-    const aptos = [];
-    for (const par of SEPS) {
-      const sep = par[0], nombreSep = par[1];
-      const counts = muestra.map((l) => contarCampos(l, sep));
-      const multi = counts.filter((c) => c >= 2);
-      if (!multi.length) continue;
-      const frec = new Map();
-      multi.forEach((c) => frec.set(c, (frec.get(c) || 0) + 1));
-      let moda = 0, fmax = 0;
-      frec.forEach((f, c) => { if (f > fmax) { fmax = f; moda = c; } });
-      const soporteMulti = fmax / multi.length;
-      const soporteTotal = counts.filter((c) => c === moda).length / counts.length;
-      if (soporteMulti >= 0.8 && soporteTotal >= 0.5) {
-        aptos.push({ sep: sep, nombreSep: nombreSep, moda: moda, soporteTotal: soporteTotal });
-      }
-    }
-    if (aptos.length === 0) {
-      frenar(
-        'ningun separador (coma, punto y coma, tabulador) produce una cantidad estable de columnas (>=2) sobre las primeras ' + muestra.length + ' lineas no vacias',
-        'una tabla con separador consistente; esto no parece una tabla'
-      );
-    }
-    aptos.sort((a, b) => b.soporteTotal - a.soporteTotal);
-    if (aptos.length > 1 && aptos[0].soporteTotal === aptos[1].soporteTotal) {
-      frenar(
-        'dos separadores igual de consistentes: ' + aptos[0].nombreSep + ' y ' + aptos[1].nombreSep,
-        'un unico separador dominante; no se adivina'
-      );
-    }
-    const sep = aptos[0].sep;
-    meta.separador = aptos[0].nombreSep;
-
-    // --- Parseo completo + encabezado ---
-    const registros = parsearCSV(texto, sep);
-    const esVacio = (r) => r.every((c) => String(c).trim() === '');
-
-    const frecCols = new Map();
-    registros.forEach((r) => {
-      if (esVacio(r) || r.length < 2) return;
-      frecCols.set(r.length, (frecCols.get(r.length) || 0) + 1);
-    });
-    let modaCols = 0, fcmax = 0;
-    frecCols.forEach((f, c) => { if (f > fcmax) { fcmax = f; modaCols = c; } });
-    if (modaCols < 2) {
-      frenar('una sola columna en un archivo de ' + registros.length + ' lineas', 'al menos 2 columnas');
-    }
-
-    // El encabezado es la primera linea cuya cantidad de campos coincide con
-    // la de la mayoria. Lo de arriba se saltea y se REPORTA, no muere mudo.
-    const headerIdx = registros.findIndex((r) => !esVacio(r) && r.length === modaCols);
-    meta.encabezadoLinea = headerIdx + 1;
-    for (let i = 0; i < headerIdx; i++) {
-      const r = registros[i];
-      meta.salteadas.push({
-        linea: i + 1,
-        contenido: esVacio(r) ? '' : r.join(sep === '\\t' ? ' ' : sep).slice(0, 80),
-      });
-    }
-    encabezados = registros[headerIdx].map((c) => String(c).trim());
-
-    filasDatos = [];
-    for (let i = headerIdx + 1; i < registros.length; i++) {
-      const r = registros[i];
-      if (esVacio(r)) { meta.filasVaciasIgnoradas++; continue; }
-      let campos = r.slice();
-      if (campos.length > encabezados.length) {
-        const sobra = campos.slice(encabezados.length);
-        if (sobra.every((c) => String(c).trim() === '')) {
-          campos = campos.slice(0, encabezados.length);
-          meta.advertencias.push('linea ' + (i + 1) + ': campos vacios de mas al final, recortados');
-        } else {
-          frenar(
-            'la linea ' + (i + 1) + ' tiene ' + campos.length + ' campos con contenido y el encabezado tiene ' + encabezados.length,
-            'filas con a lo sumo tantos campos como el encabezado'
-          );
-        }
-      }
-      if (campos.length < encabezados.length) {
-        meta.filasIncompletas.push(
-          'linea ' + (i + 1) + ': ' + campos.length + ' de ' + encabezados.length + ' campos'
-        );
-        while (campos.length < encabezados.length) campos.push('');
-      }
-      const obj = {};
-      encabezados.forEach((h, j) => { obj[h] = campos[j]; });
-      filasDatos.push(obj);
-    }
+    // El lector es el MISMO que usa la lista de baja de F14 (ver JS_LECTOR).
+    // Escribe sobre meta a medida que descubre: si se rechaza a mitad, la
+    // ficha igual muestra tamano y encoding.
+    const t = leerTabla(buf, meta);
+    encabezados = t.encabezados;
+    filasDatos = t.filas;
   } else {
     // Planilla: los items ya vienen de extractFromFile (operation xlsx), que
     // es la unica pieza que sabe leer el formato. Aca no hay separador ni
@@ -1345,11 +1470,7 @@ try {
       MAPEO_NORM[normNombre(k)] = MAPEO[k];
     }
   }
-  const SIN_NORM = {};
-  for (const canon of Object.keys(SINONIMOS)) {
-    if (canon.indexOf('_') === 0) continue;
-    SINONIMOS[canon].forEach((s) => { SIN_NORM[normNombre(s)] = canon; });
-  }
+  const SIN_NORM = indexarSinonimos(SINONIMOS);
 
   const resolucion = {};   // canonica -> { orig, fuente }
   const usadas = new Set();
@@ -1460,6 +1581,128 @@ try {
 }
 """
 
+JS_F11_PUERTA = JS_F11_PUERTA_CABECERA + JS_LECTOR + JS_F11_PUERTA_CUERPO
+
+
+JS_F14_BAJA_CABECERA = """// F14 - Sets de la lista de baja (opt-out del cliente).
+//
+// Lee la SEGUNDA lista que trae el cliente (los que pidieron baja / no llamar /
+// quemados) y arma los dos sets contra los que despues cruza F06:
+//   telefonos: canonicos NO vacios  (el mismo canonico que produce F01)
+//   cuils:     de 11 digitos        (los mismos 11 que produce F02)
+//
+// Es Nivel 1: el dato lo aporta el CLIENTE. Esto NO consulta el registro
+// oficial "No Llame" (Ley 26.951) ni ningun organismo — eso es Nivel 2 y
+// necesita inscribirse. No prometerlo en ningun lado.
+//
+// POR QUE ESTE NODO EXISTE (y no se compara contra el string crudo): la lista
+// de baja trae los telefonos escritos en cualquier formato, igual que la lista
+// principal. Comparando strings crudos no matchea casi nada y se te escapa la
+// mayoria de los que pidieron baja — el falso negativo caro, a escala. Por eso
+// se normaliza con EL MISMO normalizador (JS_NORM_TELEFONO / JS_NORM_CUIL) y
+// se compara canonico contra canonico. Es el mismo argumento que "2 de los 8
+// duplicados solo aparecen despues de normalizar", con una segunda lista.
+//
+// ANTI-FOOTGUN, va al verificador: solo entra al set el telefono canonico NO
+// vacio y el CUIL de 11 digitos. Un numero ilegible de la lista de baja NO
+// puede barrer las filas de la principal que tienen telefono vacio, y un CUIL
+// roto no barre CUILs rotos. Vacio nunca matchea vacio.
+
+const ARCHIVO = __ARCHIVO_BAJA_JSON__;
+const SINONIMOS = __SINONIMOS_JSON__;
+"""
+
+
+JS_F14_BAJA_CUERPO = """
+function frenar(detectado, esperado) {
+  throw new Error(
+    'F14 RECHAZO (lista de baja) \\u2014 archivo: ' + ARCHIVO +
+    ' \\u2014 detectado: ' + detectado +
+    ' \\u2014 esperado: ' + esperado
+  );
+}
+
+// Mismo camino que la puerta para traer el binario (n8n 2.x: el Code node
+// corre en un task runner y el archivo no viaja como base64 en items).
+let buf = null;
+if (typeof helpers !== 'undefined' && helpers && helpers.getBinaryDataBuffer) {
+  buf = await helpers.getBinaryDataBuffer(0, 'data');
+} else if (items[0].binary && items[0].binary.data && items[0].binary.data.data) {
+  buf = Buffer.from(items[0].binary.data.data, 'base64');
+}
+if (!buf || !buf.length) throw new Error('F14: no llego la lista de baja al nodo');
+
+// El MISMO lector que la lista principal: separador, encabezado corrido,
+// comillas, encoding. La lista de baja es otro archivo de cliente.
+const meta = {};
+const t = leerTabla(buf, meta);
+
+// Mapeo de columnas: la lista de baja NO necesita las 6 canonicas. Con
+// telefono O cuil alcanza — un registro "no llamar" suele ser una sola
+// columna de numeros. Si no hay ninguna de las dos, se frena: cruzar contra
+// una lista que no se entendio seria peor que no cruzar.
+const SIN_NORM = indexarSinonimos(SINONIMOS);
+const col = {};
+for (const h of t.encabezados) {
+  const canon = SIN_NORM[normNombre(h)];
+  if (canon === 'telefono' || canon === 'cuil') {
+    if (col[canon]) {
+      frenar("dos columnas ('" + col[canon] + "' y '" + h + "') mapean a '" + canon + "'",
+             'una sola columna de telefono y una sola de cuil');
+    }
+    col[canon] = h;
+  }
+}
+if (!col.telefono && !col.cuil) {
+  frenar('ninguna columna de la lista de baja mapea a telefono ni a cuil. Columnas: [' + t.encabezados.join(', ') + ']',
+         'al menos una columna de telefono o de CUIL, resoluble por config/sinonimos.json');
+}
+
+const telefonos = new Set();
+const cuils = new Set();
+let telIlegibles = 0, cuilIlegibles = 0;
+
+for (const fila of t.filas) {
+  if (col.telefono) {
+    const crudo = fila[col.telefono];
+    const r = normalizarTelefono(crudo);
+    // Vacio NUNCA entra: si entrara, barreria a toda fila de la principal
+    // que tambien tenga el telefono vacio (contactos inocentes, y nadie se
+    // entera). Un invalido en la baja simplemente no cruza por telefono.
+    if (r.telefono_norm !== '') telefonos.add(r.telefono_norm);
+    else if (String(crudo === undefined || crudo === null ? '' : crudo).trim() !== '') telIlegibles++;
+  }
+  if (col.cuil) {
+    const crudo = fila[col.cuil];
+    const c = validarCuil(crudo);
+    // 11 digitos alcanza: no se exige DV valido (igual que F12 clasifica por
+    // prefijo aunque el DV falle). Pero menos de 11 no es identidad de nadie.
+    if (c.cuil_norm.length === 11) cuils.add(c.cuil_norm);
+    else if (String(crudo === undefined || crudo === null ? '' : crudo).trim() !== '') cuilIlegibles++;
+  }
+}
+
+return [{
+  json: {
+    telefonos: Array.from(telefonos).sort(),
+    cuils: Array.from(cuils).sort(),
+    _resumen: {
+      archivo: ARCHIVO,
+      filasLeidas: t.filas.length,
+      columnaTelefono: col.telefono || '(no vino)',
+      columnaCuil: col.cuil || '(no vino)',
+      telefonosUtiles: telefonos.size,
+      cuilsUtiles: cuils.size,
+      telefonosIlegibles: telIlegibles,
+      cuilsIlegibles: cuilIlegibles,
+    },
+  },
+}];
+"""
+
+JS_F14_BAJA = (JS_F14_BAJA_CABECERA + JS_LECTOR + JS_NORM_TELEFONO + JS_NORM_CUIL
+               + JS_F14_BAJA_CUERPO)
+
 
 JS_F11_REJA = """// F11 - Reja. Si la puerta marco rechazo, aca se corta la corrida con una
 // excepcion de n8n (exit code de error, SIN archivo de salida). Esta separado
@@ -1497,6 +1740,8 @@ JS_F11_AUDIT = """// F11 - CSV de auditoria con columnas extra del cliente.
 //   - las que la puerta conservo del archivo del cliente (extra_*)
 //   - advertencia_entrada (F11)
 //   - tipo_persona (F12, solo si la segmentacion esta etiquetando)
+//   - optout_via (F14, solo en las filas que cruzaron con la lista de baja:
+//     dice si el cruce fue por telefono, por cuil o por ambos)
 // Ninguna de las tres existe con el CSV canonico y la config por defecto, asi
 // que la salida es byte a byte la de F07 (golden intacto).
 
@@ -1510,7 +1755,7 @@ const COLS = [
   'puntaje', 'prioridad', 'motivo',
 ];
 
-const OPCIONALES = new Set(['advertencia_entrada', 'tipo_persona']);
+const OPCIONALES = new Set(['advertencia_entrada', 'tipo_persona', 'optout_via']);
 
 const extras = new Set();
 for (const item of items) {
@@ -1608,11 +1853,13 @@ def _nodos_escritura(path_out, x_armar, x_escribir, convert_type_version=1.1):
     ]
 
 
-def _params(js, fecha_corte, seg_json, basura_json=""):
+def _params(js, fecha_corte, seg_json, basura_json="", baja_ref="", motivo_optout=""):
     """Reemplaza los parametros que se embeben al generar el workflow."""
     return (js.replace("__FECHA_CORTE__", fecha_corte)
               .replace("__SEGMENTACION_JSON__", seg_json)
-              .replace("__BASURA_JSON__", basura_json))
+              .replace("__BASURA_JSON__", basura_json)
+              .replace("__BAJA_REF__", baja_ref)
+              .replace("__MOTIVO_OPTOUT__", motivo_optout))
 
 
 def _nodo_code(node_id, name, js, x, code_type_version=2):
@@ -1758,6 +2005,31 @@ FASES = {
             "reporte": ("nG-reporte", "Reporte de impacto", JS_F08_REPORTE),
         },
     },
+    # F14 - lista negra / opt-out. Mismos nodos que F12; lo que cambia es la
+    # CABEZA: cuando se pasa --lista-baja se agregan dos nodos que leen la
+    # segunda lista del cliente y arman los sets, y el nodo de F06 los consulta.
+    # Sin --lista-baja no se agrega ningun nodo y el pipeline es el de F12.
+    "14": {
+        "id": "f14optout000001",
+        "name": "12-optout",
+        "puerta": True,
+        "codes": [
+            ("n3-pasamanos", "Pasamanos (todo string)", JS_F00),
+            ("n4-telefono", "Normalizar telefono", JS_F01),
+            ("n5-cuil", "Validar CUIL", JS_F02),
+            ("n6-dedup", "Marcar duplicados", JS_F03),
+            ("n7-cobertura", "Completitud y cobertura", JS_F04),
+            ("n8-antiguedad", "Antiguedad del lead", JS_F05),
+            ("n8b-persona", "Persona física o jurídica", JS_F12),
+            ("n9-puntaje", "Puntaje explicable", JS_F06),
+            ("nA-ordenar", "Ordenar por prioridad y puntaje", JS_F07_SORT),
+        ],
+        "salida_dual": {
+            "comercial": ("nB-comercial", "CSV comercial", JS_F07_COMERCIAL),
+            "auditoria": ("nC-auditoria", "CSV auditoría (F11)", JS_F11_AUDIT),
+            "reporte": ("nG-reporte", "Reporte de impacto", JS_F08_REPORTE),
+        },
+    },
     # F12 - persona fisica vs juridica. Es F11 mas un nodo: la segmentacion se
     # decide DESPUES de tener el CUIL normalizado (F02) y ANTES del puntaje
     # (F06), que es donde vive el descarte directo. F11 queda intacta a
@@ -1820,6 +2092,45 @@ def _segmentacion_json(spec, segmentacion_path):
     return json.dumps({"etiquetar": etiquetar, "descartar": descartar}, ensure_ascii=False)
 
 
+NODO_BAJA = "Sets de lista de baja"
+
+
+def _optout(spec, opt_out_path, lista_baja):
+    """Config de F14. Devuelve (ref JS a los sets, motivo JS, path de la lista).
+
+    El gate de F14 no es un booleano: es la PRESENCIA de la lista. Sin lista, la
+    referencia queda en null, no se agrega ningun nodo, y el bloque de F06 no
+    corre -> el golden no se mueve.
+    """
+    if not any("__BAJA_REF__" in js for _, _, js in spec["codes"]):
+        return "", "", ""
+
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = opt_out_path or os.path.join(base, "config", "opt_out.json")
+    with open(path, "r", encoding="utf-8") as fh:
+        cfg = json.load(fh)
+
+    motivo = cfg.get("motivo", "")
+    if not isinstance(motivo, str) or not motivo.strip():
+        raise SystemExit(f"opt_out {path}: 'motivo' tiene que ser un texto no vacio")
+    # El reporte cuenta los descartes de opt-out buscando 'opt-out' en el
+    # motivo. Si un cliente le saca esa marca al texto, la linea del reporte
+    # dejaria de contar y nadie se enteraria: se frena al generar.
+    if "opt-out" not in motivo:
+        raise SystemExit(
+            f"opt_out {path}: el 'motivo' tiene que contener la marca 'opt-out' "
+            f"(el reporte cuenta por ahi). Vino: {motivo!r}")
+
+    lista = lista_baja or cfg.get("lista") or ""
+    if lista and os.path.splitext(lista)[1].lower() in (".xlsx", ".xls"):
+        raise SystemExit(
+            f"lista de baja {lista}: por ahora solo se lee CSV/texto. Exportala a CSV. "
+            f"(La rama de planilla existe para la lista principal, no para la de baja.)")
+
+    ref = f"$({NODO_BAJA!r}).first().json" if lista else "null"
+    return ref, json.dumps(motivo, ensure_ascii=False), lista
+
+
 def _basura_json(spec, basura_path):
     """Lee y valida config/basura.json; devuelve el literal JS a embeber.
 
@@ -1865,6 +2176,15 @@ def _basura_json(spec, basura_path):
         ensure_ascii=False)
 
 
+def _sinonimos_json():
+    """La tabla de sinonimos versionada, lista para embeber. La usan la puerta
+    (lista principal) y el nodo de la lista de baja: los dos son archivos de
+    cliente y se mapean con las mismas reglas."""
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base, "config", "sinonimos.json"), "r", encoding="utf-8") as fh:
+        return json.dumps(json.load(fh), ensure_ascii=False)
+
+
 def _js_puerta(path_in, mapeo_path):
     """Arma el JS de la puerta: embebe modo, ruta, sinonimos y mapeo.
 
@@ -1874,10 +2194,7 @@ def _js_puerta(path_in, mapeo_path):
     ext = os.path.splitext(path_in)[1].lower()
     modo = "planilla" if ext in (".xlsx", ".xls") else "texto"
 
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sin_path = os.path.join(base, "config", "sinonimos.json")
-    with open(sin_path, "r", encoding="utf-8") as fh:
-        sinonimos = json.load(fh)
+    sinonimos_js = _sinonimos_json()
 
     mapeo = None
     if mapeo_path:
@@ -1892,19 +2209,21 @@ def _js_puerta(path_in, mapeo_path):
     js = (JS_F11_PUERTA
           .replace("__MODO__", modo)
           .replace("__ARCHIVO_JSON__", json.dumps(path_in))
-          .replace("__SINONIMOS_JSON__", json.dumps(sinonimos, ensure_ascii=False))
+          .replace("__SINONIMOS_JSON__", sinonimos_js)
           .replace("__MAPEO_JSON__", json.dumps(mapeo, ensure_ascii=False)))
     return js, modo
 
 
 def build(path_in, path_out, fase="00", code_type_version=2, convert_type_version=1.1,
           fecha_corte="", path_out_audit="", path_reporte="", mapeo_path="",
-          ficha_out="", segmentacion_path="", basura_path=""):
+          ficha_out="", segmentacion_path="", basura_path="",
+          opt_out_path="", lista_baja=""):
     if fase not in FASES:
         raise SystemExit(f"fase desconocida: {fase!r}. Conocidas: {sorted(FASES)}")
     spec = FASES[fase]
     seg_json = _segmentacion_json(spec, segmentacion_path)
     basura_json = _basura_json(spec, basura_path)
+    baja_ref, motivo_optout, lista_baja = _optout(spec, opt_out_path, lista_baja)
 
     def link(a, b):
         return {a: {"main": [[{"node": b, "type": "main", "index": 0}]]}}
@@ -1912,12 +2231,12 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
     if spec.get("puerta"):
         return _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
                           path_out_audit, path_reporte, mapeo_path, ficha_out, link,
-                          seg_json, basura_json)
+                          seg_json, basura_json, baja_ref, motivo_optout, lista_baja)
 
     nodos = _nodos_lectura(path_in)
     x = 600
     for node_id, name, js in spec["codes"]:
-        js_final = _params(js, fecha_corte, seg_json, basura_json)
+        js_final = _params(js, fecha_corte, seg_json, basura_json, baja_ref, motivo_optout)
         nodos.append(_nodo_code(node_id, name, js_final, x, code_type_version))
         x += 200
 
@@ -1980,7 +2299,8 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
 
 def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
                path_out_audit, path_reporte, mapeo_path, ficha_out, link,
-               seg_json="", basura_json=""):
+               seg_json="", basura_json="", baja_ref="", motivo_optout="",
+               lista_baja=""):
     """Cablea el workflow de F11.
 
     trigger -> leer -> [planilla a items (solo xlsx)] -> puerta
@@ -2001,6 +2321,30 @@ def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
         ficha_out = os.path.join(out_dir, f"ficha_entrada_{stem}.md")
 
     nodos = _nodos_lectura(path_in)[:2]        # trigger + leer, SIN extract csv
+    trigger, leer_principal = nodos[0], nodos[1]
+
+    # F14: la lista de baja se lee ANTES que la principal, en la misma cadena.
+    # El nodo de F06 la consulta despues por nombre ($('Sets de lista de baja')),
+    # que es como n8n deja leer la salida de un nodo anterior sin arrastrarla
+    # item por item por todo el pipeline. Sin --lista-baja no se agrega nada.
+    baja_nodos = []
+    if lista_baja:
+        leer_baja = {
+            "parameters": {"fileSelector": lista_baja, "options": {}},
+            "id": "nL-leer-baja",
+            "name": "Leer lista de baja",
+            "type": "n8n-nodes-base.readWriteFile",
+            "typeVersion": 1,
+            "position": [200, -600],
+        }
+        js_baja = (JS_F14_BAJA
+                   .replace("__ARCHIVO_BAJA_JSON__", json.dumps(lista_baja))
+                   .replace("__SINONIMOS_JSON__", _sinonimos_json()))
+        sets_baja = _nodo_code("nL-sets-baja", NODO_BAJA, js_baja, 400, code_type_version)
+        sets_baja["position"] = [400, -600]
+        baja_nodos = [leer_baja, sets_baja]
+        nodos = [trigger] + baja_nodos + [leer_principal]
+
     x = 400
     if modo == "planilla":
         nodos.append({
@@ -2033,7 +2377,7 @@ def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
 
     cadena = [reja]
     for node_id, name, js in spec["codes"]:
-        js_final = _params(js, fecha_corte, seg_json, basura_json)
+        js_final = _params(js, fecha_corte, seg_json, basura_json, baja_ref, motivo_optout)
         n = _nodo_code(node_id, name, js_final, x, code_type_version)
         nodos.append(n)
         cadena.append(n)
@@ -2061,12 +2405,18 @@ def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
         branch_nodes.append((code_node, write_node))
 
     connections = {}
-    connections.update(link(nodos[0]["name"], nodos[1]["name"]))       # trigger -> leer
+    if baja_nodos:
+        # trigger -> leer baja -> sets de baja -> leer principal
+        connections.update(link(trigger["name"], baja_nodos[0]["name"]))
+        connections.update(link(baja_nodos[0]["name"], baja_nodos[1]["name"]))
+        connections.update(link(baja_nodos[1]["name"], leer_principal["name"]))
+    else:
+        connections.update(link(trigger["name"], leer_principal["name"]))
     if modo == "planilla":
-        connections.update(link(nodos[1]["name"], "Planilla a items"))
+        connections.update(link(leer_principal["name"], "Planilla a items"))
         connections.update(link("Planilla a items", puerta["name"]))
     else:
-        connections.update(link(nodos[1]["name"], puerta["name"]))
+        connections.update(link(leer_principal["name"], puerta["name"]))
 
     # La ficha PRIMERO (se escribe antes de que la reja pueda frenar).
     connections[puerta["name"]] = {
@@ -2117,6 +2467,11 @@ if __name__ == "__main__":
                     help="F12: config de segmentacion (default: config/segmentacion.json)")
     ap.add_argument("--basura", default="",
                     help="F13: patrones de basura (default: config/basura.json)")
+    ap.add_argument("--lista-baja", default="",
+                    help="F14: lista de baja / opt-out que aporta el cliente (CSV). "
+                         "Sin este parametro el cruce no corre y el pipeline no cambia.")
+    ap.add_argument("--opt-out", default="",
+                    help="F14: config del motivo de opt-out (default: config/opt_out.json)")
     ap.add_argument("--code-tv", type=float, default=2)
     ap.add_argument("--convert-tv", type=float, default=1.1)
     args = ap.parse_args()
@@ -2134,6 +2489,8 @@ if __name__ == "__main__":
         ficha_out=args.ficha_out,
         segmentacion_path=args.segmentacion,
         basura_path=args.basura,
+        opt_out_path=args.opt_out,
+        lista_baja=args.lista_baja,
     )
     with open(args.destino, "w", encoding="utf-8") as fh:
         json.dump(wf, fh, indent=2, ensure_ascii=False)

@@ -18,6 +18,7 @@
 | F11  | Puerta de entrada               | **CERRADA (commiteada 2026-08-01)** | v11: 70/70 PASA + suite 10/10 + golden intacto |
 | F12  | Persona física vs. jurídica     | **CERRADA** | v12: 102/102 PASA + suite 10/10 + golden intacto |
 | F13  | Números y nombres basura        | **CERRADA** | v13: 53/53 PASA + suite 10/10 + golden y reporte intactos |
+| F14  | Lista negra / opt-out           | **CERRADA** | v14: 57/57 PASA + v11/v12/v13 y suite 10/10 tras factorizar |
 
 ## Decisiones pendientes de Pedro
 
@@ -272,6 +273,93 @@ Verificados por `v11_puerta.py` (48/48).
 ---
 
 ## Bitácora
+
+**2026-08-02 — F14 cerrada: lista negra / opt-out del cliente.** Filtro 10 del
+catálogo. Cruza la lista principal contra una **segunda lista que trae el
+cliente** (los que pidieron baja / no llamar / quemados) y descarta con motivo.
+Sigue siendo Nivel 1: el dato lo aporta el cliente. **No** consulta el registro
+oficial "No Llame" (Ley 26.951) — eso es Nivel 2 y necesita inscripción, y el
+reporte lo aclara explícitamente en la sección nueva.
+
+**El gate es la presencia de la lista, no un booleano** (tercer gate distinto:
+F12 apagado por config, F13 siempre encendido, F14 por presencia del archivo).
+Sin `--lista-baja` no se agrega ningún nodo, el bloque de F06 no corre y las dos
+salidas quedan byte a byte idénticas al golden.
+
+**Resultados del cruce sobre `data/leads_optout_1.csv` (7 filas):**
+
+| Vía de cruce | Filas | Cuáles |
+|--------------|-------|--------|
+| por teléfono | **2** | O01, O02 |
+| por CUIL     | **1** | O03 |
+| por ambos    | **1** | O07 |
+| **total opt-out** | **4** | |
+
+**O05 (teléfono vacío) quedó descartado por "sin teléfono", NO por opt-out** —
+verificado por las dos cosas, no por una sola. Es la trampa central: O05 trae el
+teléfono escrito `s/d`, **el mismo string** que una fila de la lista de baja. Un
+cruce por string crudo lo habría marcado opt-out; el cruce por canónico no,
+porque **vacío nunca matchea vacío**. La segunda trampa (O06, CUIL de 9 dígitos
+igual al de la baja) tampoco cruza: menos de 11 dígitos no es identidad de nadie.
+
+**Las tres parejas que prueban el valor del filtro** están escritas en formatos
+distintos a propósito — comparando strings crudos no matchearía ninguna:
+
+| Principal | Lista de baja | Canónico común |
+|-----------|---------------|----------------|
+| `11 4161-7956` | `011 4161-7956` | `+541141617956` |
+| `011 15 6161-7956` | `+54 9 11 6161 7956` | `+5491161617956` |
+| `11 4242-4242` | `011 4242-4242` | `+541142424242` |
+
+**Hubo que factorizar, y la próxima fase que lo reuse ya lo sabe.** El
+normalizador de teléfono (F01) y el de CUIL (F02) vivían *inline* dentro de su
+nodo; ahora son `JS_NORM_TELEFONO` y `JS_NORM_CUIL`, una sola implementación que
+usan el nodo de F01/F02 y el nodo de cabeza de F14. También se factorizó el
+**lector de archivos de cliente** de la puerta (F11) a `JS_LECTOR` con
+`leerTabla()`: la lista de baja es otro archivo de cliente y se lee con las
+mismas reglas de separador, encabezado corrido, comillas y encoding. Escribir un
+segundo normalizador o un segundo lector "parecido" era el bug de esta fase: si
+difiere en un solo formato, el cruce falla **en silencio** justo en los formatos
+raros, que son los que el filtro existe para atrapar. Verificado: **v11 70/70,
+v12 102/102, v13 53/53 y la suite 10/10 con los dos SHA-256 intactos** después de
+la factorización.
+
+**Arquitectura:** dos piezas, como en F11. Un **nodo de cabeza**
+(`Sets de lista de baja`) que lee la segunda lista y arma los dos sets
+(teléfonos canónicos no vacíos, CUILs de 11 dígitos); y la **decisión de
+descarte en el nodo de F06**, pegada a los otros descartes directos. El nodo de
+F06 consulta los sets con `$('Sets de lista de baja')` — así los sets no viajan
+duplicados en las 200 filas. El cruce es **OR** (teléfono o CUIL): una lista de
+baja real suele traer una sola de las dos columnas. La columna `optout_via`
+(telefono / cuil / ambos) aparece solo cuando hay lista.
+
+**Reporte:** cuarta categoría, en su propia sección — "Por pedido de baja del
+titular (opt-out)", separada de calidad de dato, zona y segmento. Segmento es
+"no le quiero vender a este tipo" (elección comercial); opt-out es "este titular
+pidió que no lo llamen" (obligación). Misma regla que protege el golden: la
+sección se muestra solo si cuenta ≥ 1, y el A/B contra la fase 12 confirma que el
+reporte del golden no se movió ni un carácter.
+
+**Desvío del spec, anotado en la fase:** O02 se escribió `011 15 6161-7956` y no
+`11 15 6161 7956`, porque F01 reconoce el formato viejo con `15` **solo con el 0
+inicial**; sin él son 12 dígitos y caen en `invalido`. Escrito como estaba, O02
+no habría probado nada del cruce. Se respetó F01 (tocar su lógica está prohibido
+en esta fase) y se ajustó el dato de prueba. Si algún día se quiere aceptar el
+`15` sin el 0, es una corrección de F01 con su propia sesión.
+
+**Una regresión que la factorización introdujo y se arregló en la sesión:** al
+extraer `leerTabla()`, la ficha de un archivo **rechazado** perdió el tamaño y el
+encoding (`n/d` donde antes decía "199 bytes" y "UTF-8 sin BOM"), porque el
+lector cortaba antes de devolver. La atrapó el `git diff` de la ficha versionada
+del adversario 5, no un verificador — v11 no chequeaba esos dos campos en el
+rechazo. Ahora `leerTabla()` escribe sobre el objeto del llamador **a medida que
+descubre**, así un rechazo igual muestra todo lo que alcanzó a saber. Es lo que
+pide F11: la ficha es lo que se lee antes de apretar correr, y la del rechazo es
+la que más se lee.
+
+**Limitación conocida:** la lista de baja se lee **solo en CSV/texto**. Si viene
+en `.xlsx`, el generador frena con un mensaje que pide exportarla a CSV (la rama
+de planilla existe para la lista principal, no para la de baja).
 
 **2026-08-01 — F13 cerrada: números y nombres basura + la deuda del reporte.**
 Filtro 9 del catálogo. Descarta teléfonos claramente falsos y marca nombres de

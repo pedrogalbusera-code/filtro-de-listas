@@ -1,0 +1,11 @@
+{
+  "_comentario": "F14 - Lista negra / opt-out del cliente. El GATE de este filtro no es un booleano: es la PRESENCIA de la segunda lista. Sin lista de baja el nodo no se agrega, el cruce no corre y la salida queda byte a byte identica al golden. Este archivo guarda solo el texto del motivo.",
+
+  "_alcance_legal": "Se cruza UNICAMENTE contra la lista que aporta el cliente (los que pidieron baja, no llamar, o que el cliente marco como quemados). NO se consulta el Registro Nacional 'No Llame' (Ley 26.951) ni RENAPER ni ningun organismo: eso es Nivel 2, necesita inscripcion, y no se promete en el reporte ni en el pitch.",
+
+  "_motivo": "Texto que queda en la columna 'motivo' de cada contacto descartado. TIENE que contener la marca 'opt-out': el reporte cuenta los descartes buscando esa marca, y si se la sacan la linea del reporte dejaria de contar en silencio. El generador lo valida y frena.",
+  "motivo": "en lista de no llamar del cliente (opt-out)",
+
+  "_lista": "Ruta por defecto de la lista de baja. El default es null: la lista se pasa por parametro (--lista-baja <archivo>), igual que el CSV de entrada, porque es un archivo del cliente y no del repo. Si se pone una ruta aca, se usa cuando no viene el parametro.",
+  "lista": null
+}
