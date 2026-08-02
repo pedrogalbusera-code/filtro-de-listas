@@ -18,7 +18,8 @@
 | F11  | Puerta de entrada               | **CERRADA (commiteada 2026-08-01)** | v11: 70/70 PASA + suite 10/10 + golden intacto |
 | F12  | Persona física vs. jurídica     | **CERRADA** | v12: 102/102 PASA + suite 10/10 + golden intacto |
 | F13  | Números y nombres basura        | **CERRADA** | v13: 53/53 PASA + suite 10/10 + golden y reporte intactos |
-| F14  | Lista negra / opt-out           | **CERRADA** | v14: 57/57 PASA + v11/v12/v13 y suite 10/10 tras factorizar |
+| F14  | Lista negra / opt-out           | **CERRADA (endurecida 2026-08-02)** | v14: 95/95 PASA (con baja .xlsx) + suite 10/10 |
+| —    | CORRECCION-F11                  | **CERRADA** | v11: 72/72 PASA (ficha del rechazo blindada) |
 
 ## Decisiones pendientes de Pedro
 
@@ -273,6 +274,48 @@ Verificados por `v11_puerta.py` (48/48).
 ---
 
 ## Bitácora
+
+**2026-08-02 — CORRECCION-F11: la puerta endurecida tras la factorización.**
+Dos ítems aditivos: ninguno cambia comportamiento y el golden no se movió.
+
+**1. El rechazo de v11 ahora blinda `tamaño` y `encoding`.** La regresión que
+había introducido la factorización de F14 (la ficha del archivo rechazado
+perdía los dos campos y decía `n/d`) estaba arreglada en el código, pero **el
+verificador no la habría atrapado**: el caso de rechazo miraba el exit de error
+y la ausencia de CSV, no la ficha. Por eso la había encontrado un `git diff`
+humano y no la suite — exactamente el agujero de F05/F09. Ahora v11 compara
+contra los valores **exactos** (`199 bytes`, `UTF-8 sin BOM`), escritos a mano
+en el test. Un check de "el campo existe" no servía: lo que se coló fue un
+`n/d` presente pero vacío de dato. **v11: 70/70 → 72/72.**
+
+**2. La lista de baja de F14 acepta `.xlsx`.** Antes el generador frenaba
+pidiendo exportar a CSV; un opt-out de un cliente real llega en Excel tan
+seguido como en CSV. Ahora la baja usa las **mismas dos ramas** que la lista
+principal: `.xlsx` por `extractFromFile` + `leerPlanilla()`, texto por
+`leerTabla()`. Se factorizó también la rama de planilla de la puerta a
+`leerPlanilla()` para no escribir un tercer camino.
+
+`data/lista_baja_1.xlsx` (generado por `herramientas/gen_xlsx_lista_baja.py`,
+zipfile + XML, sin dependencias) trae las mismas 7 filas que el CSV pero con
+las **columnas renombradas** (`Celular`, `CUIT`) y una columna de más, así el
+mapeo por `config/sinonimos.json` tiene que resolverlas de verdad. Veredicto
+idéntico celda por celda —O01/O02 por teléfono, O03 por CUIL, O07 por ambos,
+O05 descartado por "sin teléfono"— y **las tres salidas byte a byte idénticas**
+a las de la baja en CSV. Ese hash igual es el check más fuerte del bloque: el
+formato del archivo del cliente no puede cambiar el resultado.
+**v14: 57/57 → 95/95.**
+
+**Limitación que queda registrada (heredada de F11, no de F14):** en planilla
+**no se saltea basura arriba del encabezado** — la fila 1 de la hoja *es* el
+encabezado. En texto sí se saltea y se reporta. El criterio de la corrección
+pedía "columnas renombradas y basura arriba"; se hizo lo primero, y lo segundo
+no se hizo porque en el path de planilla de F11 no existe: un título arriba
+haría que ese título sea el encabezado y el mapeo frenaría pidiendo las
+columnas. Agregarlo sería tocar la lectura de planilla de la lista principal
+(riesgo sobre F11) y no era parte de una corrección aditiva. Vale para los dos
+archivos, principal y baja.
+
+Suite después de los dos ítems: **10/10 PASA**, golden intacto.
 
 **2026-08-02 — F14 cerrada: lista negra / opt-out del cliente.** Filtro 10 del
 catálogo. Cruza la lista principal contra una **segunda lista que trae el

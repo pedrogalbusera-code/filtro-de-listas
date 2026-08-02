@@ -205,6 +205,23 @@ ese es el hallazgo de F05). Tres bloques:
    ambos).
 3. **El reporte**: con la baja, la línea de opt-out aparece con el conteo correcto; sobre
    el canónico (sin baja) el reporte es byte a byte el del golden (A/B, la línea ausente).
+4. **La misma baja en `.xlsx`** (agregado por `CORRECCION-F11`): `data/lista_baja_1.xlsx`
+   trae las mismas 7 filas pero con las columnas renombradas (`Celular`, `CUIT`) y una
+   columna de más, así el mapeo por `config/sinonimos.json` tiene que resolverlas de
+   verdad. Mismo veredicto celda por celda, y las tres salidas **byte a byte idénticas**
+   a las de la baja en CSV: el formato del archivo del cliente no puede cambiar el
+   resultado.
+
+### La lista de baja acepta `.xlsx` (CORRECCION-F11)
+
+Un opt-out de un cliente real llega en Excel tan seguido como en CSV. La baja usa las
+**mismas dos ramas** que la lista principal: `.xlsx` por `extractFromFile` +
+`leerPlanilla()`, texto por `leerTabla()`. No hay un tercer camino.
+
+**Limitación heredada de F11, no de F14:** en planilla **no se saltea basura arriba del
+encabezado** — la fila 1 de la hoja *es* el encabezado. En texto sí se saltea y se
+reporta. Un `.xlsx` con un título arriba haría que ese título sea el encabezado, y el
+mapeo fallaría pidiendo las columnas. Vale para la lista principal y para la de baja.
 
 ## Fuera de alcance
 

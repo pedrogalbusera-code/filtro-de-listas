@@ -302,6 +302,24 @@ def main():
     ficha = leer_ficha(caso["ficha"])
     check("(prosa) la ficha SÍ se genera, con estado RECHAZADO",
           "| Estado | **RECHAZADO** |" in ficha)
+    # Los dos valores van escritos A MANO: 199 bytes es el tamaño real del
+    # archivo y UTF-8 sin BOM su encoding.
+    #
+    # Por qué existen estos dos checks: al factorizar el lector en F14, la
+    # ficha del RECHAZO perdió los dos campos (pasaron a 'n/d') porque el
+    # lector cortaba antes de devolver. No lo atrapó ningún verificador —lo
+    # atrapó un git diff humano—, que es exactamente el agujero de F05/F09.
+    # La ficha del rechazo es la que más se lee: es lo único que queda cuando
+    # no hay CSV de salida.
+    #
+    # Comparan contra el valor EXACTO a propósito: un check de "el campo
+    # existe" habría pasado con el bug puesto, porque el 'n/d' estaba ahí.
+    check("(prosa) la ficha del rechazo reporta el tamaño exacto (199 bytes)",
+          "| Tamaño | 199 bytes |" in ficha,
+          str([l for l in ficha.split("\n") if l.startswith("| Tamaño")]))
+    check("(prosa) la ficha del rechazo reporta el encoding exacto (UTF-8 sin BOM)",
+          "| Encoding | UTF-8 sin BOM |" in ficha,
+          str([l for l in ficha.split("\n") if l.startswith("| Encoding")]))
     salida = caso["salida"]
     check("(prosa) el error dice QUÉ archivo",
           "leads_adversario_5_prosa.txt" in salida)

@@ -1287,6 +1287,31 @@ function leerTabla(buf, r) {
   return { encabezados: encabezados, filas: filas };
 }
 
+// Planilla -> { encabezados, filas }. Los items ya vienen de extractFromFile
+// (operacion xlsx), que es la unica pieza que sabe leer el formato. Aca no hay
+// separador ni encabezado que buscar: la primera fila de la hoja ES el
+// encabezado. Lo usan la lista principal (F11) y la lista de baja (F14): el
+// mismo camino, no uno nuevo por archivo.
+//
+// LIMITACION heredada de F11 (no de F14): en planilla NO se saltea basura
+// arriba del encabezado. En texto si —leerTabla busca la linea del encabezado
+// y reporta lo salteado—, pero en xlsx la fila 1 manda. Un xlsx con un titulo
+// arriba haria que ese titulo sea el encabezado.
+function leerPlanilla(items, r) {
+  r.encabezadoLinea = 1;
+  const encabezados = [];
+  const visto = new Set();
+  for (const it of items) {
+    for (const k of Object.keys(it.json)) {
+      if (!visto.has(k)) { visto.add(k); encabezados.push(k); }
+    }
+  }
+  return {
+    encabezados: encabezados.map((h) => String(h).trim()),
+    filas: items.map((it) => it.json),
+  };
+}
+
 // Indice de sinonimos normalizados -> canonica. Lo usan la puerta y la lista
 // de baja para mapear las columnas del cliente sin adivinar por parecido.
 function indexarSinonimos(SINONIMOS) {
@@ -1437,19 +1462,9 @@ try {
     encabezados = t.encabezados;
     filasDatos = t.filas;
   } else {
-    // Planilla: los items ya vienen de extractFromFile (operation xlsx), que
-    // es la unica pieza que sabe leer el formato. Aca no hay separador ni
-    // encabezado que buscar: la primera fila de la hoja es el encabezado.
-    meta.encabezadoLinea = 1;
-    encabezados = [];
-    const visto = new Set();
-    for (const it of items) {
-      for (const k of Object.keys(it.json)) {
-        if (!visto.has(k)) { visto.add(k); encabezados.push(k); }
-      }
-    }
-    encabezados = encabezados.map((h) => String(h).trim());
-    filasDatos = items.map((it) => it.json);
+    const t = leerPlanilla(items, meta);
+    encabezados = t.encabezados;
+    filasDatos = t.filas;
   }
 
   meta.columnas = encabezados.slice();
@@ -1609,6 +1624,7 @@ JS_F14_BAJA_CABECERA = """// F14 - Sets de la lista de baja (opt-out del cliente
 // roto no barre CUILs rotos. Vacio nunca matchea vacio.
 
 const ARCHIVO = __ARCHIVO_BAJA_JSON__;
+const MODO = '__MODO_BAJA__';
 const SINONIMOS = __SINONIMOS_JSON__;
 """
 
@@ -1622,20 +1638,26 @@ function frenar(detectado, esperado) {
   );
 }
 
-// Mismo camino que la puerta para traer el binario (n8n 2.x: el Code node
-// corre en un task runner y el archivo no viaja como base64 en items).
-let buf = null;
-if (typeof helpers !== 'undefined' && helpers && helpers.getBinaryDataBuffer) {
-  buf = await helpers.getBinaryDataBuffer(0, 'data');
-} else if (items[0].binary && items[0].binary.data && items[0].binary.data.data) {
-  buf = Buffer.from(items[0].binary.data.data, 'base64');
-}
-if (!buf || !buf.length) throw new Error('F14: no llego la lista de baja al nodo');
-
-// El MISMO lector que la lista principal: separador, encabezado corrido,
-// comillas, encoding. La lista de baja es otro archivo de cliente.
+// El MISMO lector que la lista principal, con las MISMAS dos ramas: la baja
+// de un cliente real puede venir en Excel igual que la lista principal.
+// Texto -> leerTabla (separador, encabezado corrido, comillas, encoding).
+// Planilla -> leerPlanilla sobre lo que ya extrajo extractFromFile.
 const meta = {};
-const t = leerTabla(buf, meta);
+let t;
+if (MODO === 'planilla') {
+  t = leerPlanilla(items, meta);
+} else {
+  // Mismo camino que la puerta para traer el binario (n8n 2.x: el Code node
+  // corre en un task runner y el archivo no viaja como base64 en items).
+  let buf = null;
+  if (typeof helpers !== 'undefined' && helpers && helpers.getBinaryDataBuffer) {
+    buf = await helpers.getBinaryDataBuffer(0, 'data');
+  } else if (items[0].binary && items[0].binary.data && items[0].binary.data.data) {
+    buf = Buffer.from(items[0].binary.data.data, 'base64');
+  }
+  if (!buf || !buf.length) throw new Error('F14: no llego la lista de baja al nodo');
+  t = leerTabla(buf, meta);
+}
 
 // Mapeo de columnas: la lista de baja NO necesita las 6 canonicas. Con
 // telefono O cuil alcanza — un registro "no llamar" suele ser una sola
@@ -2103,7 +2125,7 @@ def _optout(spec, opt_out_path, lista_baja):
     corre -> el golden no se mueve.
     """
     if not any("__BAJA_REF__" in js for _, _, js in spec["codes"]):
-        return "", "", ""
+        return "", "", "", ""
 
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path = opt_out_path or os.path.join(base, "config", "opt_out.json")
@@ -2122,13 +2144,12 @@ def _optout(spec, opt_out_path, lista_baja):
             f"(el reporte cuenta por ahi). Vino: {motivo!r}")
 
     lista = lista_baja or cfg.get("lista") or ""
-    if lista and os.path.splitext(lista)[1].lower() in (".xlsx", ".xls"):
-        raise SystemExit(
-            f"lista de baja {lista}: por ahora solo se lee CSV/texto. Exportala a CSV. "
-            f"(La rama de planilla existe para la lista principal, no para la de baja.)")
+    # La baja de un cliente real llega en Excel tan seguido como en CSV: usa
+    # las MISMAS dos ramas que la lista principal (planilla / texto).
+    modo = "planilla" if os.path.splitext(lista)[1].lower() in (".xlsx", ".xls") else "texto"
 
     ref = f"$({NODO_BAJA!r}).first().json" if lista else "null"
-    return ref, json.dumps(motivo, ensure_ascii=False), lista
+    return ref, json.dumps(motivo, ensure_ascii=False), lista, modo
 
 
 def _basura_json(spec, basura_path):
@@ -2223,7 +2244,7 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
     spec = FASES[fase]
     seg_json = _segmentacion_json(spec, segmentacion_path)
     basura_json = _basura_json(spec, basura_path)
-    baja_ref, motivo_optout, lista_baja = _optout(spec, opt_out_path, lista_baja)
+    baja_ref, motivo_optout, lista_baja, modo_baja = _optout(spec, opt_out_path, lista_baja)
 
     def link(a, b):
         return {a: {"main": [[{"node": b, "type": "main", "index": 0}]]}}
@@ -2231,7 +2252,8 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
     if spec.get("puerta"):
         return _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
                           path_out_audit, path_reporte, mapeo_path, ficha_out, link,
-                          seg_json, basura_json, baja_ref, motivo_optout, lista_baja)
+                          seg_json, basura_json, baja_ref, motivo_optout, lista_baja,
+                          modo_baja)
 
     nodos = _nodos_lectura(path_in)
     x = 600
@@ -2300,7 +2322,7 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
 def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
                path_out_audit, path_reporte, mapeo_path, ficha_out, link,
                seg_json="", basura_json="", baja_ref="", motivo_optout="",
-               lista_baja=""):
+               lista_baja="", modo_baja="texto"):
     """Cablea el workflow de F11.
 
     trigger -> leer -> [planilla a items (solo xlsx)] -> puerta
@@ -2339,10 +2361,24 @@ def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
         }
         js_baja = (JS_F14_BAJA
                    .replace("__ARCHIVO_BAJA_JSON__", json.dumps(lista_baja))
+                   .replace("__MODO_BAJA__", modo_baja)
                    .replace("__SINONIMOS_JSON__", _sinonimos_json()))
-        sets_baja = _nodo_code("nL-sets-baja", NODO_BAJA, js_baja, 400, code_type_version)
-        sets_baja["position"] = [400, -600]
-        baja_nodos = [leer_baja, sets_baja]
+        baja_nodos = [leer_baja]
+        if modo_baja == "planilla":
+            # Misma pieza que para la lista principal: extractFromFile es lo
+            # unico que sabe leer un xlsx. El nodo de sets recibe los items ya
+            # extraidos y los pasa por leerPlanilla, igual que la puerta.
+            baja_nodos.append({
+                "parameters": {"operation": "xlsx", "options": {"headerRow": True}},
+                "id": "nL-planilla-baja",
+                "name": "Planilla de baja a items",
+                "type": "n8n-nodes-base.extractFromFile",
+                "typeVersion": 1,
+                "position": [400, -600],
+            })
+        sets_baja = _nodo_code("nL-sets-baja", NODO_BAJA, js_baja, 600, code_type_version)
+        sets_baja["position"] = [600, -600]
+        baja_nodos.append(sets_baja)
         nodos = [trigger] + baja_nodos + [leer_principal]
 
     x = 400
@@ -2406,10 +2442,11 @@ def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
 
     connections = {}
     if baja_nodos:
-        # trigger -> leer baja -> sets de baja -> leer principal
+        # trigger -> leer baja -> [planilla a items] -> sets de baja -> leer principal
         connections.update(link(trigger["name"], baja_nodos[0]["name"]))
-        connections.update(link(baja_nodos[0]["name"], baja_nodos[1]["name"]))
-        connections.update(link(baja_nodos[1]["name"], leer_principal["name"]))
+        for a, b in zip(baja_nodos, baja_nodos[1:]):
+            connections.update(link(a["name"], b["name"]))
+        connections.update(link(baja_nodos[-1]["name"], leer_principal["name"]))
     else:
         connections.update(link(trigger["name"], leer_principal["name"]))
     if modo == "planilla":

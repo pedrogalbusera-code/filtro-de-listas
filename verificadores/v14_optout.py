@@ -13,6 +13,9 @@ Tres bloques:
      conteo por via de cruce.
   3. El reporte: la linea de opt-out con su conteo, en su propia categoria, y
      con la aclaracion de que NO se consulta el registro oficial "No Llame".
+  4. La MISMA baja en .xlsx (columnas renombradas, columna de mas): mismo
+     veredicto celda por celda, y la salida byte a byte igual que con el CSV.
+     Un opt-out real llega en Excel tan seguido como en CSV.
 
 Los esperados son LITERALES escritos a mano desde las tablas de
 fases/F14-lista-negra-optout.md y desde el canonico documentado en F01
@@ -38,6 +41,7 @@ GOLDEN_COM = os.path.join(SAL, "golden_2026-07-28.csv")
 GOLDEN_AUD = os.path.join(SAL, "golden_2026-07-28_auditoria.csv")
 CANONICO = os.path.join(DATA, "leads_prueba_SINTETICO_1.csv")
 LISTA_BAJA = os.path.join(DATA, "lista_baja_1.csv")
+LISTA_BAJA_XLSX = os.path.join(DATA, "lista_baja_1.xlsx")
 PRINCIPAL = os.path.join(DATA, "leads_optout_1.csv")
 WF_ID = "f14optout___tmp"
 FECHA_CORTE = "2026-07-28"
@@ -167,6 +171,61 @@ def fila(rows, tag):
     return next((x for x in rows if x.get("nombre", "").startswith(tag + " ")), None)
 
 
+def cruce_por_celda(rows, etq):
+    """Los checks de celda del cruce. Se corren igual sobre la baja en CSV y
+    sobre la baja en .xlsx: el formato del archivo del cliente no puede cambiar
+    el veredicto."""
+    for tag, es_optout, via, prioridad, que_prueba in CASOS:
+        r = fila(rows, tag)
+        if r is None:
+            check(f"({etq}) {tag}: la fila está en la salida", False, "no aparece")
+            continue
+        tiene = MOTIVO in r["motivo"]
+        if es_optout:
+            check(f"({etq}) {tag} → opt-out ({que_prueba})", tiene,
+                  f"motivo: {r['motivo']!r}")
+            check(f"({etq}) {tag} → optout_via == {via}", r.get("optout_via") == via,
+                  f"esperado [{via}] obtenido [{r.get('optout_via')!r}]")
+            check(f"({etq}) {tag} → el motivo aparece UNA sola vez",
+                  r["motivo"].count(MOTIVO) == 1,
+                  f"aparece {r['motivo'].count(MOTIVO)} veces: {r['motivo']!r}")
+        else:
+            check(f"({etq}) {tag} → NO opt-out ({que_prueba})", not tiene,
+                  f"motivo: {r['motivo']!r}")
+            check(f"({etq}) {tag} → sin optout_via", (r.get("optout_via") or "") == "",
+                  f"obtenido [{r.get('optout_via')!r}]")
+        check(f"({etq}) {tag} → prioridad {prioridad}", r["prioridad"] == prioridad,
+              f"esperado [{prioridad}] obtenido [{r['prioridad']}]")
+
+    # O05 se verifica por DOS cosas, no por una: quedo descartado Y su motivo
+    # es el de sin telefono, no el de opt-out. Un check que solo mirara
+    # "descartado" pasaria con el bug de vacio-matchea-vacio puesto.
+    o05 = fila(rows, "O05")
+    check(f"({etq}) O05 quedó descartado por SIN TELÉFONO, no por opt-out",
+          o05 is not None and MOT_SIN_TEL in o05["motivo"] and MOTIVO not in o05["motivo"],
+          f"motivo: {o05['motivo']!r}" if o05 else "no está")
+    check(f"({etq}) O05 tiene el teléfono canónico vacío (es la trampa que se prueba)",
+          o05 is not None and o05["telefono_norm"] == "",
+          f"telefono_norm: {o05['telefono_norm']!r}" if o05 else "")
+    o06 = fila(rows, "O06")
+    check(f"({etq}) O06 tiene el CUIL de 9 dígitos y NO cruzó",
+          o06 is not None and o06["cuil_norm"] == "204412233"
+          and MOTIVO not in o06["motivo"],
+          f"cuil_norm: {o06['cuil_norm']!r}" if o06 else "")
+
+    vias = {}
+    for r in rows:
+        v = (r.get("optout_via") or "").strip()
+        if v:
+            vias[v] = vias.get(v, 0) + 1
+    for via, esp in ESPERADO_VIA.items():
+        check(f"({etq}) {esp} fila(s) cruzaron por {via}", vias.get(via, 0) == esp,
+              f"hay {vias.get(via, 0)}")
+    n_opt = sum(1 for r in rows if MOTIVO in r["motivo"])
+    check(f"({etq}) {ESPERADO_OPTOUT} descartes por opt-out en total",
+          n_opt == ESPERADO_OPTOUT, f"hay {n_opt}")
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print("=" * 70)
@@ -241,55 +300,7 @@ def main():
           f"hay {len(rows)}")
     check("(baja) la columna optout_via aparece cuando hay lista", "optout_via" in cols)
 
-    for tag, es_optout, via, prioridad, que_prueba in CASOS:
-        r = fila(rows, tag)
-        if r is None:
-            check(f"(baja) {tag}: la fila está en la salida", False, "no aparece")
-            continue
-        tiene = MOTIVO in r["motivo"]
-        if es_optout:
-            check(f"(baja) {tag} → opt-out ({que_prueba})", tiene,
-                  f"motivo: {r['motivo']!r}")
-            check(f"(baja) {tag} → optout_via == {via}", r.get("optout_via") == via,
-                  f"esperado [{via}] obtenido [{r.get('optout_via')!r}]")
-            check(f"(baja) {tag} → el motivo aparece UNA sola vez",
-                  r["motivo"].count(MOTIVO) == 1,
-                  f"aparece {r['motivo'].count(MOTIVO)} veces: {r['motivo']!r}")
-        else:
-            check(f"(baja) {tag} → NO opt-out ({que_prueba})", not tiene,
-                  f"motivo: {r['motivo']!r}")
-            check(f"(baja) {tag} → sin optout_via", (r.get("optout_via") or "") == "",
-                  f"obtenido [{r.get('optout_via')!r}]")
-        check(f"(baja) {tag} → prioridad {prioridad}", r["prioridad"] == prioridad,
-              f"esperado [{prioridad}] obtenido [{r['prioridad']}]")
-
-    # O05 se verifica por DOS cosas, no por una: quedo descartado Y su motivo
-    # es el de sin telefono, no el de opt-out. Un check que solo mirara
-    # "descartado" pasaria con el bug de vacio-matchea-vacio puesto.
-    o05 = fila(rows, "O05")
-    check("(baja) O05 quedó descartado por SIN TELÉFONO, no por opt-out",
-          o05 is not None and MOT_SIN_TEL in o05["motivo"] and MOTIVO not in o05["motivo"],
-          f"motivo: {o05['motivo']!r}" if o05 else "no está")
-    check("(baja) O05 tiene el teléfono canónico vacío (es la trampa que se prueba)",
-          o05 is not None and o05["telefono_norm"] == "",
-          f"telefono_norm: {o05['telefono_norm']!r}" if o05 else "")
-    o06 = fila(rows, "O06")
-    check("(baja) O06 tiene el CUIL de 9 dígitos y NO cruzó",
-          o06 is not None and o06["cuil_norm"] == "204412233"
-          and MOTIVO not in o06["motivo"],
-          f"cuil_norm: {o06['cuil_norm']!r}" if o06 else "")
-
-    vias = {}
-    for r in rows:
-        v = (r.get("optout_via") or "").strip()
-        if v:
-            vias[v] = vias.get(v, 0) + 1
-    for via, esp in ESPERADO_VIA.items():
-        check(f"(baja) {esp} fila(s) cruzaron por {via}", vias.get(via, 0) == esp,
-              f"hay {vias.get(via, 0)}")
-    n_opt = sum(1 for r in rows if MOTIVO in r["motivo"])
-    check(f"(baja) {ESPERADO_OPTOUT} descartes por opt-out en total",
-          n_opt == ESPERADO_OPTOUT, f"hay {n_opt}")
+    cruce_por_celda(rows, "baja")
     check("(baja) las filas de opt-out siguen enteras (nombre, teléfono, motivo)",
           all(r["nombre"].strip() and r["motivo"].strip()
               for r in rows if MOTIVO in r["motivo"]))
@@ -322,6 +333,33 @@ def main():
           fila_reporte(rep, "Contactos descartados") == 5
           and sum(1 for r in rows if r["prioridad"] == "descartado") == 5,
           f"reporte dice {fila_reporte(rep, 'Contactos descartados')}")
+
+    # ==================================================================
+    print("\n--- Bloque 4: la misma baja en .xlsx — mismo veredicto ---")
+    # Un opt-out de un cliente real llega en Excel tan seguido como en CSV. Si
+    # el formato del archivo cambiara el veredicto, el filtro no serviria justo
+    # en el caso mas probable. El .xlsx trae las mismas 7 filas pero con las
+    # columnas renombradas ('Celular' y 'CUIT') y una columna de mas, asi el
+    # mapeo por sinonimos tiene que resolverlas de verdad.
+    caso_x = correr_caso(PRINCIPAL, "bajaxlsx", lista_baja=LISTA_BAJA_XLSX)
+    check("(xlsx) la corrida termina bien", caso_x["exito"])
+    rows_x, cols_x = leer_csv(caso_x["aud"]) if os.path.exists(caso_x["aud"]) else ([], [])
+    check("(xlsx) 7 filas de salida", len(rows_x) == 7, f"hay {len(rows_x)}")
+    check("(xlsx) la columna optout_via aparece", "optout_via" in cols_x)
+
+    cruce_por_celda(rows_x, "xlsx")
+
+    # El check mas fuerte del bloque: la auditoria entera sale byte a byte
+    # igual que con la baja en CSV. Si una sola celda difiriera, el formato
+    # del archivo de baja estaria cambiando el resultado.
+    check("(xlsx) la auditoría es byte a byte idéntica a la de la baja en CSV",
+          os.path.exists(caso_x["aud"]) and os.path.exists(caso["aud"])
+          and file_hash(caso_x["aud"]) == file_hash(caso["aud"]),
+          "el formato de la lista de baja cambió el resultado")
+    check("(xlsx) el comercial también es byte a byte idéntico",
+          file_hash(caso_x["com"]) == file_hash(caso["com"]))
+    check("(xlsx) el reporte también es idéntico",
+          leer_txt(caso_x["rep"]) == leer_txt(caso["rep"]))
 
     # ------------------------------------------------------------------
     print("\n" + "=" * 70)
