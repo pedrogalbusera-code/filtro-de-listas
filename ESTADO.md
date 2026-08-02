@@ -17,6 +17,7 @@
 | F10  | Empaquetado y portfolio         | **CERRADA** | correr_todo: 10/10 PASA, n8n limpio OK, SHA-256 golden OK |
 | F11  | Puerta de entrada               | **CERRADA (commiteada 2026-08-01)** | v11: 70/70 PASA + suite 10/10 + golden intacto |
 | F12  | Persona física vs. jurídica     | **CERRADA** | v12: 102/102 PASA + suite 10/10 + golden intacto |
+| F13  | Números y nombres basura        | **CERRADA** | v13: 53/53 PASA + suite 10/10 + golden y reporte intactos |
 
 ## Decisiones pendientes de Pedro
 
@@ -272,6 +273,69 @@ Verificados por `v11_puerta.py` (48/48).
 
 ## Bitácora
 
+**2026-08-01 — F13 cerrada: números y nombres basura + la deuda del reporte.**
+Filtro 9 del catálogo. Descarta teléfonos claramente falsos y marca nombres de
+relleno, sobre el dato ya normalizado por F01.
+
+**A diferencia de F12, va ENCENDIDO por defecto.** Segmentar depende de a quién
+le vende el cliente; un teléfono `1111111111` no es llamable para nadie.
+`config/basura.json` no prende ni apaga el filtro: solo afina los patrones.
+
+**El riesgo de esta fase es asimétrico y define todo el diseño.** Dejar pasar un
+número trucho cuesta una llamada; marcar uno real cuesta un contacto que nadie
+va a extrañar, porque no hay operador que llame para descubrir el error. Por eso
+no hay ni una heurística: o el número tiene una cola de dígitos idénticos más
+larga que cualquier número real medido, o está en una lista escrita a mano.
+
+**El dato que fija el umbral** (medido esta sesión): la corrida más larga de un
+mismo dígito es **3** en las 200 filas reales y **4** en el adversario
+(`1155551111`). El umbral quedó en **7 dígitos iguales al final** de los 10
+nacionales — tres de margen. El generador **rechaza** un umbral menor a 4, y una
+secuencia que no tenga 10 dígitos (nunca matchearía y nadie se enteraría).
+
+**Las dos reglas de comportamiento:**
+
+- **Teléfono de relleno → descarte duro** (`teléfono de relleno +0 → descarte`).
+  A un número inventado no se puede llamar: es tan no-llamable como uno truncado.
+- **Nombre de relleno → marca, NO descarte** (`nombre de relleno +0`). Un nombre
+  trucho con un teléfono bueno sigue siendo llamable, igual que "sin nombre" en
+  F04. El operador solo no sabe a quién saluda. El motivo queda en la columna
+  `motivo`, que es la que el cliente ve en el CSV comercial.
+
+Los nombres se comparan **por igualdad** sobre el normalizado, nunca por
+substring: `Ana Testa` es un apellido real y no puede caer por contener "test".
+De la lista de secuencias se sacó a propósito `1122334455`: tiene área 11 válida
+y podría ser el número de alguien.
+
+**Dónde vive:** en el **mismo nodo de F06** que los otros descartes directos. No
+hay nodo nuevo — F13 no deriva ningún dato, solo juzga lo que F01 normalizó.
+
+**Verificador `v13_basura.py`: 53/53 PASA** (4 corridas reales de n8n). Además
+del golden, corre un **A/B**: la misma lista canónica con los patrones vacíos (el
+pipeline de antes de F13) produce el **mismo reporte byte a byte**. Si un patrón
+se comiera una fila real, las dos corridas dividirían. `data/leads_basura_1.csv`
+(7 filas, nuevo) trae los dos patrones y **tres controles** que prueban cero
+falsos positivos por celda: `1155551111` (repite dígitos pero es real),
+`Ana Testa` (substring) y `1145111111` (**6** repetidos al final — fija el umbral
+exacto: con seis no alcanza).
+
+**Suite completa: 10/10 PASA**, los dos SHA-256 del golden intactos.
+
+**Deuda del reporte de F08 — CERRADA (la que F12 dejó registrada).** El reporte
+contaba solo "sin teléfono", "fuera de zona" y "duplicado"; los descartes por
+segmento y por basura habrían sumado al total sin aparecer desglosados. Ahora
+están las dos filas, con la regla que protege el golden: **un motivo se muestra
+solo si cuenta ≥ 1**, así que con la lista canónica los dos dan 0 y el reporte no
+cambia ni un carácter. El segmento va en **su propia subtabla** ("decisión
+comercial del cliente"), no mezclado con la calidad de dato: juntarlos inflaría
+el ahorro con algo que el cliente eligió, no con basura que el archivo traía.
+
+**Nota sobre los `workflows/*.json` versionados:** son fotos de cada fase. Como
+F13 tocó el nodo de F06, los de fases anteriores quedan desactualizados respecto
+de `gen_workflow.py`. Se regeneró solo la cabeza (`11-persona.json`), igual que
+en F12. La fuente de verdad es `gen_workflow.py` + la suite, que regenera todo
+antes de verificar.
+
 **2026-08-01 — F12 cerrada: persona física vs. jurídica.** Primer filtro nuevo
 de Nivel 1 del catálogo (filtro 8). Etiqueta cada contacto `fisica` /
 `juridica` / `desconocida` por el **prefijo de `cuil_norm`** que F02 ya
@@ -327,13 +391,10 @@ lógica del nodo. Dos archivos de entrada:
 
 Suite completa después del cambio: **10/10 PASA**, golden intacto.
 
-**Limitación registrada, no parcheada:** el reporte de F08 **no cuenta los
-descartes por segmento**. Con la segmentación encendida esas filas suman al
-total de descartados pero no aparecen en ninguna de las dos subtablas de
-motivos (el reporte busca "sin teléfono", "fuera de zona" y "duplicado"). Hoy
-no molesta porque la segmentación está apagada y ningún cliente la usa, pero
-**hay que agregarle su fila al reporte antes de vendérsela a alguien**. Está
-anotado en `fases/F12-persona-fisica-juridica.md` y en el catálogo.
+~~**Limitación registrada, no parcheada:** el reporte de F08 **no cuenta los
+descartes por segmento**.~~ **CERRADA por F13 (2026-08-01):** el reporte ahora
+tiene la subtabla "Por segmento no buscado (decisión comercial del cliente)",
+separada de la calidad de dato, y se muestra solo cuando cuenta ≥ 1.
 
 **2026-08-01 — F11 commiteada y pusheada; hueco T01–T10 cerrado.** F11 había
 corrido 5 archivos por el nodo real de n8n pero nunca `leads_adversario_1.csv`:

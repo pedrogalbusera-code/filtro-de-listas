@@ -111,13 +111,10 @@ Dos archivos de entrada para el bloque 2:
 
 ## Fuera de alcance
 
-- **El reporte de impacto (F08) no cuenta los descartes por segmento.** Con la
-  segmentación encendida, esas filas suman al total de descartados pero **no
-  aparecen en ninguna de las dos subtablas de motivos** (el reporte busca
-  "sin teléfono", "fuera de zona" y "duplicado"). Hoy no molesta —la
-  segmentación está apagada y ningún cliente la usa—, pero **hay que agregarle
-  su fila al reporte antes de vendérsela a alguien**. Queda registrado, no
-  parcheado a las apuradas.
+- ~~**El reporte de impacto (F08) no cuenta los descartes por segmento.**~~
+  **Cerrado por F13:** el reporte tiene ahora la subtabla "Por segmento no
+  buscado (decisión comercial del cliente)", separada de la calidad de dato y de
+  la zona, que se muestra solo cuando cuenta ≥ 1.
 - **Normalizar los valores de `origen`** (sigue siendo de F11/F06).
 - **Verificar que el CUIL exista en AFIP.** Eso es Nivel 2, Etapa 2, y sigue
   bloqueado por trámites. F12 lee un prefijo, no consulta un padrón.

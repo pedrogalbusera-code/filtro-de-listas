@@ -535,6 +535,45 @@ const CONFIG = {
   umbrales: { alta: 70, media: 40 },
 };
 
+// F13 - Patrones de basura, embebidos desde config/basura.json al GENERAR.
+// A diferencia de la segmentacion (F12), esto va ENCENDIDO por defecto: es
+// limpieza universal, no una decision comercial de un cliente. La config no
+// prende ni apaga, solo afina los patrones.
+//
+// La regla que ordena todo: ANTE LA DUDA, NO ES BASURA. Un falso positivo tira
+// un contacto real y nadie se entera nunca. Por eso aca no hay ni una
+// heuristica: o el numero tiene una cola de digitos identicos mas larga que
+// cualquier numero real medido, o esta en una lista escrita a mano.
+//
+// Medido sobre las 200 filas reales: estos patrones marcan CERO. La corrida
+// mas larga de un mismo digito en datos reales es 3, contra un umbral de 7.
+const BASURA = __BASURA_JSON__;
+
+const NOMBRES_RELLENO = new Set((BASURA.nombres && BASURA.nombres.relleno ? BASURA.nombres.relleno : []).map(normNombre));
+const SECUENCIAS = new Set(BASURA.telefonos && BASURA.telefonos.secuencias ? BASURA.telefonos.secuencias : []);
+const MIN_IGUALES = (BASURA.telefonos && BASURA.telefonos.min_digitos_iguales_al_final) || 0;
+
+function normNombre(s) {
+  return String(s === undefined || s === null ? '' : s)
+    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')   // saca tildes/diacriticos
+    .toLowerCase().trim().replace(/\\s+/g, ' ');
+}
+
+// Trabaja sobre los 10 digitos NACIONALES del telefono ya normalizado por F01,
+// no sobre el string crudo: '11 1111-1111' y '+541111111111' son el mismo
+// numero inventado y tienen que caer los dos.
+function telefonoBasura(norm) {
+  const d = String(norm === undefined || norm === null ? '' : norm).replace(/\\D/g, '');
+  if (d.length < 10) return false;   // sin numero utilizable: ya lo descarto el bloque 1
+  const nac = d.slice(-10);
+  if (SECUENCIAS.has(nac)) return true;
+  if (MIN_IGUALES >= 4 && nac.length >= MIN_IGUALES) {
+    const cola = nac.slice(-MIN_IGUALES);
+    if (cola.split('').every((c) => c === cola[0])) return true;
+  }
+  return false;
+}
+
 function fmt(n) {
   return n >= 0 ? '+' + n : String(n);
 }
@@ -558,6 +597,14 @@ return items.map((item) => {
     partes.push(tipo + ' ' + fmt(pts));
   } else {
     partes.push('sin teléfono ' + fmt(0) + ' \\u2192 descarte');
+    descarte = true;
+  }
+
+  // 1b. Telefono de relleno (F13). DESCARTE DURO: a un numero inventado no se
+  // puede llamar, es tan no-llamable como uno truncado. Va pegado al bloque del
+  // telefono para que las dos verdades del telefono queden juntas en el motivo.
+  if (telefonoBasura(json.telefono_norm)) {
+    partes.push('teléfono de relleno ' + fmt(0) + ' \\u2192 descarte');
     descarte = true;
   }
 
@@ -606,6 +653,16 @@ return items.map((item) => {
   if (toBool(json.descarte_segmento)) {
     partes.push(String(json.motivo_segmento || 'segmento no buscado') + ' ' + fmt(0) + ' \\u2192 descarte');
     descarte = true;
+  }
+
+  // 8. Nombre de relleno (F13). MARCA, NO descarte: un nombre trucho con un
+  // telefono bueno sigue siendo un contacto llamable, igual que 'sin nombre'
+  // en F04. Deja su linea en el motivo, que es la columna que el cliente ve en
+  // el CSV comercial, asi el operador sabe que no va a saber a quien saluda.
+  // La comparacion es por IGUALDAD sobre el nombre normalizado, nunca por
+  // substring: 'Ana Testa' es un apellido real.
+  if (NOMBRES_RELLENO.has(normNombre(json.nombre))) {
+    partes.push('nombre de relleno ' + fmt(0));
   }
 
   // Prioridad
@@ -817,6 +874,11 @@ const CONFIG = {
 const total = items.length;
 let alta = 0, media = 0, descartado = 0;
 let sin_tel = 0, fuera_zona = 0, dup = 0, por_score = 0;
+// F13: motivos que no existian cuando se escribio el reporte. Se cuentan
+// siempre y se MUESTRAN solo si hay al menos uno (ver abajo): con la lista
+// canonica los dos dan 0, no aparece ninguna fila nueva y el reporte del
+// golden no cambia ni un caracter.
+let tel_relleno = 0, segmento = 0;
 
 for (const item of items) {
   const pri = String(item.json.prioridad || '');
@@ -830,6 +892,8 @@ for (const item of items) {
     if (motivo.indexOf('sin tel\\u00e9fono') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) sin_tel++;
     if (motivo.indexOf('fuera de zona') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) fuera_zona++;
     if (motivo.indexOf('duplicado') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) dup++;
+    if (motivo.indexOf('tel\\u00e9fono de relleno') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) tel_relleno++;
+    if (motivo.indexOf('segmento no buscado') >= 0 && motivo.indexOf('\\u2192 descarte') >= 0) segmento++;
     if (motivo.indexOf('\\u2192 descarte') < 0) por_score++;
   }
 }
@@ -866,6 +930,9 @@ md += '### Por calidad de dato (hechos del archivo)\\n\\n';
 md += '| Motivo | Contactos |\\n';
 md += '|--------|-----------|\\n';
 md += '| Sin tel\\u00e9fono utilizable | ' + sin_tel + ' |\\n';
+if (tel_relleno > 0) {
+  md += '| Tel\\u00e9fono de relleno (n\\u00famero inventado) | ' + tel_relleno + ' |\\n';
+}
 md += '| Duplicado | ' + dup + ' |\\n';
 if (por_score > 0) {
   md += '| Puntaje bajo (< 40) sin descarte directo | ' + por_score + ' |\\n';
@@ -876,6 +943,17 @@ md += '### Por zona de cobertura (supuesto nuestro, no del archivo)\\n\\n';
 md += '| Motivo | Contactos |\\n';
 md += '|--------|-----------|\\n';
 md += '| Fuera de zona de cobertura | ' + fuera_zona + ' |\\n\\n';
+
+// Tercera categoria, separada a proposito de las otras dos: no es un hecho del
+// archivo ni un supuesto nuestro, es una decision comercial del cliente (que
+// tipo de persona busca). Mezclarla con la calidad de dato inflaria el ahorro
+// con algo que el cliente eligio, no con basura que el archivo traia.
+if (segmento > 0) {
+  md += '### Por segmento no buscado (decisi\\u00f3n comercial del cliente)\\n\\n';
+  md += '| Motivo | Contactos |\\n';
+  md += '|--------|-----------|\\n';
+  md += '| Tipo de persona que el cliente no busca | ' + segmento + ' |\\n\\n';
+}
 
 md += '*Un contacto puede tener m\\u00e1s de un motivo. La suma de motivos supera el total de descartados.*\\n\\n';
 
@@ -1530,9 +1608,11 @@ def _nodos_escritura(path_out, x_armar, x_escribir, convert_type_version=1.1):
     ]
 
 
-def _params(js, fecha_corte, seg_json):
+def _params(js, fecha_corte, seg_json, basura_json=""):
     """Reemplaza los parametros que se embeben al generar el workflow."""
-    return js.replace("__FECHA_CORTE__", fecha_corte).replace("__SEGMENTACION_JSON__", seg_json)
+    return (js.replace("__FECHA_CORTE__", fecha_corte)
+              .replace("__SEGMENTACION_JSON__", seg_json)
+              .replace("__BASURA_JSON__", basura_json))
 
 
 def _nodo_code(node_id, name, js, x, code_type_version=2):
@@ -1740,6 +1820,51 @@ def _segmentacion_json(spec, segmentacion_path):
     return json.dumps({"etiquetar": etiquetar, "descartar": descartar}, ensure_ascii=False)
 
 
+def _basura_json(spec, basura_path):
+    """Lee y valida config/basura.json; devuelve el literal JS a embeber.
+
+    La validacion protege contra el unico error grave de esta fase: un patron
+    demasiado goloso que se coma numeros reales. Un umbral de menos de 4
+    digitos iguales, o una secuencia que no tenga 10 digitos (los nacionales),
+    frenan al generar.
+    """
+    if not any("__BASURA_JSON__" in js for _, _, js in spec["codes"]):
+        return ""
+
+    if not basura_path:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        basura_path = os.path.join(base, "config", "basura.json")
+    with open(basura_path, "r", encoding="utf-8") as fh:
+        cfg = json.load(fh)
+
+    tel = cfg.get("telefonos", {})
+    minimo = tel.get("min_digitos_iguales_al_final", 0)
+    if not isinstance(minimo, int) or isinstance(minimo, bool) or not (4 <= minimo <= 10):
+        raise SystemExit(
+            f"basura {basura_path}: 'min_digitos_iguales_al_final' tiene que ser un "
+            f"entero entre 4 y 10, vino {minimo!r}. Menos de 4 empezaria a marcar "
+            f"numeros reales: la corrida mas larga medida en datos reales es 3.")
+
+    secuencias = tel.get("secuencias", [])
+    if not isinstance(secuencias, list):
+        raise SystemExit(f"basura {basura_path}: 'secuencias' tiene que ser una lista")
+    malas = [s for s in secuencias
+             if not (isinstance(s, str) and len(s) == 10 and s.isdigit())]
+    if malas:
+        raise SystemExit(
+            f"basura {basura_path}: cada secuencia tiene que ser un string de 10 "
+            f"digitos (los nacionales, que es contra lo que se compara). Mal: {malas}")
+
+    relleno = cfg.get("nombres", {}).get("relleno", [])
+    if not isinstance(relleno, list) or any(not isinstance(n, str) for n in relleno):
+        raise SystemExit(f"basura {basura_path}: 'nombres.relleno' tiene que ser una lista de strings")
+
+    return json.dumps(
+        {"telefonos": {"min_digitos_iguales_al_final": minimo, "secuencias": secuencias},
+         "nombres": {"relleno": relleno}},
+        ensure_ascii=False)
+
+
 def _js_puerta(path_in, mapeo_path):
     """Arma el JS de la puerta: embebe modo, ruta, sinonimos y mapeo.
 
@@ -1774,11 +1899,12 @@ def _js_puerta(path_in, mapeo_path):
 
 def build(path_in, path_out, fase="00", code_type_version=2, convert_type_version=1.1,
           fecha_corte="", path_out_audit="", path_reporte="", mapeo_path="",
-          ficha_out="", segmentacion_path=""):
+          ficha_out="", segmentacion_path="", basura_path=""):
     if fase not in FASES:
         raise SystemExit(f"fase desconocida: {fase!r}. Conocidas: {sorted(FASES)}")
     spec = FASES[fase]
     seg_json = _segmentacion_json(spec, segmentacion_path)
+    basura_json = _basura_json(spec, basura_path)
 
     def link(a, b):
         return {a: {"main": [[{"node": b, "type": "main", "index": 0}]]}}
@@ -1786,12 +1912,12 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
     if spec.get("puerta"):
         return _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
                           path_out_audit, path_reporte, mapeo_path, ficha_out, link,
-                          seg_json)
+                          seg_json, basura_json)
 
     nodos = _nodos_lectura(path_in)
     x = 600
     for node_id, name, js in spec["codes"]:
-        js_final = _params(js, fecha_corte, seg_json)
+        js_final = _params(js, fecha_corte, seg_json, basura_json)
         nodos.append(_nodo_code(node_id, name, js_final, x, code_type_version))
         x += 200
 
@@ -1854,7 +1980,7 @@ def build(path_in, path_out, fase="00", code_type_version=2, convert_type_versio
 
 def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
                path_out_audit, path_reporte, mapeo_path, ficha_out, link,
-               seg_json=""):
+               seg_json="", basura_json=""):
     """Cablea el workflow de F11.
 
     trigger -> leer -> [planilla a items (solo xlsx)] -> puerta
@@ -1907,7 +2033,7 @@ def _build_f11(path_in, path_out, spec, code_type_version, fecha_corte,
 
     cadena = [reja]
     for node_id, name, js in spec["codes"]:
-        js_final = _params(js, fecha_corte, seg_json)
+        js_final = _params(js, fecha_corte, seg_json, basura_json)
         n = _nodo_code(node_id, name, js_final, x, code_type_version)
         nodos.append(n)
         cadena.append(n)
@@ -1989,6 +2115,8 @@ if __name__ == "__main__":
                     help="F11: ruta de la ficha de entrada (default: salidas/ficha_entrada_<archivo>.md)")
     ap.add_argument("--segmentacion", default="",
                     help="F12: config de segmentacion (default: config/segmentacion.json)")
+    ap.add_argument("--basura", default="",
+                    help="F13: patrones de basura (default: config/basura.json)")
     ap.add_argument("--code-tv", type=float, default=2)
     ap.add_argument("--convert-tv", type=float, default=1.1)
     args = ap.parse_args()
@@ -2005,6 +2133,7 @@ if __name__ == "__main__":
         mapeo_path=args.mapeo,
         ficha_out=args.ficha_out,
         segmentacion_path=args.segmentacion,
+        basura_path=args.basura,
     )
     with open(args.destino, "w", encoding="utf-8") as fh:
         json.dump(wf, fh, indent=2, ensure_ascii=False)

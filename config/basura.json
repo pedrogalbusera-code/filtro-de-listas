@@ -1,0 +1,36 @@
+{
+  "_comentario": "F13 - Numeros y nombres basura. A DIFERENCIA de la segmentacion (F12), esto va ENCENDIDO por defecto: es limpieza universal, no depende del cliente. La config no prende ni apaga el filtro, solo afina los patrones. Un cliente que no quiera un patron le vacia la lista.",
+  "_regla_de_oro": "Ante la duda, NO es basura. Un falso positivo tira a la basura un contacto real y nadie se entera. Por eso todo lo de aca es explicito o inequivoco: cero heuristicas agresivas.",
+  "_medido": "Sobre data/leads_prueba_SINTETICO_1.csv (200 filas reales) estos patrones marcan CERO filas. La corrida mas larga de un mismo digito en datos reales es de 3 (4 en el archivo adversario), contra el umbral de 7.",
+
+  "telefonos": {
+    "_min_digitos_iguales_al_final": "Cuantos digitos iguales AL FINAL de los 10 nacionales hacen basura. 7 deja 3 digitos de margen sobre lo que se ve en datos reales. Bajarlo de 4 lo rechaza el generador: empezaria a comerse numeros de verdad.",
+    "min_digitos_iguales_al_final": 7,
+
+    "_secuencias": "Lista EXPLICITA, comparada contra los 10 digitos nacionales. No hay deteccion de 'secuencias' por algoritmo: lo que no esta en esta lista no es basura. Ninguna de estas tiene codigo de area argentino valido (12, 01) o es un patron de tecleo.",
+    "secuencias": [
+      "1234567890",
+      "0123456789",
+      "0987654321",
+      "1234512345",
+      "1212121212"
+    ]
+  },
+
+  "nombres": {
+    "_comentario": "Comparacion por IGUALDAD sobre el nombre normalizado (minusculas, sin tildes, sin espacios de mas), NUNCA por substring: 'Ana Testa' es un apellido real y no puede caer por contener 'test'.",
+    "relleno": [
+      "test",
+      "asdf",
+      "qwerty",
+      "xxx",
+      "prueba",
+      "sin nombre",
+      "nn",
+      "na",
+      "n/a",
+      "ninguno",
+      "sin dato"
+    ]
+  }
+}
