@@ -21,6 +21,7 @@ Exit code 0 si pasa, 1 si falla.
 """
 import argparse
 import csv
+import re
 import sys
 import unicodedata
 from pathlib import Path
@@ -53,16 +54,34 @@ def norm_loc(s):
     return " ".join(s.lower().strip().split())
 
 
+def nucleo_loc(s):
+    """Nucleo de la localidad: sin parentesis final ni sufijo ', provincia'."""
+    t = norm_loc(s)
+    t = re.sub(r"\s*\([^)]*\)\s*$", "", t)
+    t = re.sub(r",.*$", "", t)
+    return " ".join(t.split())
+
+
 def marcar_oraculo(fila, zona):
-    """Devuelve (en_zona, motivos[]). Misma logica que el nodo F04."""
+    """Devuelve (en_zona, motivos[]). Misma logica que el nodo F04.
+
+    OJO: este oraculo REPLICA la logica del nodo, asi que es la 3a forma de
+    check falso de prompts/README.md — atrapa que n8n corrompa un valor, no
+    que la regla este mal pensada. Por eso los casos de CORRECCION-F04
+    (parentesis, sufijo, vacia) NO se verifican con esto: van mas abajo, con
+    esperados literales escritos a mano.
+    """
     zona_set = {norm_loc(z) for z in zona}
     motivos = []
     if fila.get("telefono_tipo", "") == "invalido":
         motivos.append("sin teléfono utilizable")
     if str(fila.get("nombre", "")).strip() == "":
         motivos.append("sin nombre")
-    en_zona = norm_loc(fila.get("localidad", "")) in zona_set
-    if not en_zona:
+    sin_localidad = norm_loc(fila.get("localidad", "")) == ""
+    en_zona = (not sin_localidad) and nucleo_loc(fila.get("localidad", "")) in zona_set
+    if sin_localidad:
+        motivos.append("sin localidad")
+    elif not en_zona:
         motivos.append("fuera de zona de cobertura")
     return en_zona, motivos
 
@@ -77,6 +96,8 @@ def es_true(v):
 
 
 def main():
+    # La consola de Windows es cp1252 y los motivos traen '→' y tildes.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--salida", default=str(SALIDA))
     args = ap.parse_args()
@@ -173,7 +194,119 @@ def main():
         f"{len(moron)} filas Moron, en_zona todas TRUE: {all(es_true(f['en_zona']) for f in moron)}",
     )
 
+    # --- CORRECCION-F04: paréntesis, sufijo y "sin localidad" ---
+    # Estos casos NO se verifican con marcar_oraculo(): ese oráculo replica la
+    # lógica del nodo y por lo tanto no puede desmentirla. Van con esperados
+    # LITERALES escritos a mano, y por el NODO REAL de n8n, mirando además la
+    # prioridad end-to-end (F06) — porque el punto de la parte B no es el texto
+    # del motivo, es que la fila NO quede descartada.
+    corrida = correr_localidad()
+    check("(loc) la corrida de n8n termina bien", corrida["exito"], corrida["detalle"])
+    filas_loc = corrida["filas"]
+    check("(loc) 5 filas de salida", len(filas_loc) == 5, f"hay {len(filas_loc)}")
+    por_tag = {f["nombre"].split()[0]: f for f in filas_loc}
+
+    # (tag, localidad del archivo, en_zona, motivo_descarte exacto, prioridad)
+    CASOS_LOC = [
+        ("L01", "Morón (Buenos Aires)", True,  "",                          "alta"),
+        ("L02", "Morón, Buenos Aires",  True,  "",                          "alta"),
+        ("L03", "",                     False, "sin localidad",             "media"),
+        ("L04", "Moreno",               False, "fuera de zona de cobertura", "descartado"),
+        ("L05", "Morón",                True,  "",                          "alta"),
+    ]
+    for tag, loc, en_zona_e, motivo_e, prioridad_e in CASOS_LOC:
+        f = por_tag.get(tag)
+        if f is None:
+            check(f"(loc) {tag}: la fila está en la salida", False, "no aparece")
+            continue
+        check(f"(loc) {tag} localidad del archivo es {loc!r}", f["localidad"] == loc,
+              f"vino {f['localidad']!r}")
+        check(f"(loc) {tag} en_zona == {en_zona_e}", es_true(f["en_zona"]) == en_zona_e,
+              f"vino {f['en_zona']!r}")
+        check(f"(loc) {tag} motivo_descarte == {motivo_e!r}",
+              f["motivo_descarte"] == motivo_e, f"vino {f['motivo_descarte']!r}")
+        check(f"(loc) {tag} prioridad == {prioridad_e}", f["prioridad"] == prioridad_e,
+              f"vino {f['prioridad']!r}")
+
+    # Los dos que importan, dichos de otra forma para que no se cuelen:
+    l03 = por_tag.get("L03")
+    check("(loc) L03 (sin localidad) NO dice 'fuera de zona' en ningún lado",
+          l03 is not None and "fuera de zona" not in l03["motivo_descarte"]
+          and "fuera de zona" not in l03["motivo"],
+          f"motivo_descarte={l03['motivo_descarte']!r} motivo={l03['motivo']!r}" if l03 else "")
+    check("(loc) L03 NO queda descartada por tener la localidad vacía (sigue llamable)",
+          l03 is not None and l03["prioridad"] != "descartado",
+          f"prioridad={l03['prioridad']!r}" if l03 else "")
+    check("(loc) L03 no cobra el bono de zona: 0 puntos por localidad (decisión de Pedro)",
+          l03 is not None and "sin localidad +0" in l03["motivo"],
+          f"motivo={l03['motivo']!r}" if l03 else "")
+    l04 = por_tag.get("L04")
+    check("(loc) L04 (Moreno, realmente fuera) sigue descartada por zona",
+          l04 is not None and "fuera de zona +0 → descarte" in l04["motivo"],
+          f"motivo={l04['motivo']!r}" if l04 else "")
+
+    # El match es EXACTO sobre el núcleo, no substring ni prefijo.
+    check("(loc) el núcleo se compara exacto: 'Castelar Norte' NO es 'Castelar'",
+          nucleo_loc("Castelar Norte") == "castelar norte"
+          and nucleo_loc("Castelar Norte") not in {norm_loc(z) for z in ZONA})
+    check("(loc) 'Morón (Buenos Aires)' y 'Morón, Buenos Aires' dan el mismo núcleo",
+          nucleo_loc("Morón (Buenos Aires)") == nucleo_loc("Morón, Buenos Aires") == "moron")
+
     return reportar()
+
+
+def correr_localidad():
+    """Corre data/leads_localidad_1.csv por el pipeline real de n8n (fase 14).
+
+    Hace falta la corrida real, y hasta el final: la parte B de la corrección
+    se juega en la PRIORIDAD (F06), no en el texto del motivo de F04.
+    """
+    import json
+    import os
+    import subprocess
+    import tempfile
+
+    base = str(RAIZ)
+    gen = str(RAIZ / "herramientas" / "gen_workflow.py")
+    entrada = str(RAIZ / "data" / "leads_localidad_1.csv")
+    com = str(RAIZ / "salidas" / "_v04_loc_com.csv")
+    aud = str(RAIZ / "salidas" / "_v04_loc_aud.csv")
+    ficha = str(RAIZ / "salidas" / "ficha_entrada_leads_localidad_1.md")
+    tmp_wf = os.path.join(tempfile.gettempdir(), "wf_v04_loc.json")
+
+    for f in (com, aud):
+        if os.path.exists(f):
+            os.remove(f)
+    try:
+        subprocess.run(
+            [sys.executable, gen, tmp_wf, entrada, com, "--fase", "14",
+             "--fecha-corte", "2026-07-28", "--csv-out-audit", aud,
+             "--ficha-out", ficha],
+            check=True, capture_output=True)
+        with open(tmp_wf, encoding="utf-8") as fh:
+            wf = json.load(fh)
+        wf["id"] = "f04loc______tmp"
+        wf["name"] = "tmp-v04-loc"
+        with open(tmp_wf, "w", encoding="utf-8") as fh:
+            json.dump(wf, fh, indent=2, ensure_ascii=False)
+
+        env = os.environ.copy()
+        env["N8N_RESTRICT_FILE_ACCESS_TO"] = base
+        subprocess.run(f'npx n8n import:workflow --input="{tmp_wf}"', shell=True,
+                       check=True, env=env, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        r = subprocess.run(f"npx n8n execute --id={wf['id']}", shell=True, env=env,
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace")
+        exito = r.returncode == 0 and "Execution was successful" in (r.stdout or "")
+        filas = leer(aud) if os.path.exists(aud) else []
+        return {"exito": exito, "filas": filas,
+                "detalle": ((r.stdout or "") + (r.stderr or ""))[-200:]}
+    except Exception as e:
+        return {"exito": False, "filas": [], "detalle": str(e)[:200]}
+    finally:
+        if os.path.exists(tmp_wf):
+            os.remove(tmp_wf)
 
 
 def reportar():

@@ -21,6 +21,7 @@
 | F14  | Lista negra / opt-out           | **CERRADA (endurecida 2026-08-02)** | v14: 95/95 PASA (con baja .xlsx) + suite 10/10 |
 | —    | CORRECCION-F11                  | **CERRADA** | v11: 72/72 PASA (ficha del rechazo blindada) |
 | —    | CORRECCION-F01b                 | **CERRADA** | v01: 50/50 PASA (el `15` sin el `0`) |
+| —    | CORRECCION-F04                  | **CERRADA** | v04: 46/46 PASA (paréntesis + sin localidad) |
 
 ## Decisiones pendientes de Pedro
 
@@ -254,20 +255,23 @@ escrito. Ahí no obtiene nada: ordena lo que el cliente ya tiene.
 | 4  | T04 | teléfono  | **corregido** | Formato viejo con 15 (`011 15 …`) → ahora celular. CORRECCION-F01. |
 | 5  | T05 | teléfono  | **corregido** | `15-…` sin área → ahora invalido (antes ambiguo con norm incorrecta). CORRECCION-F01. |
 | 6  | T10 | teléfono  | **corregido** | Dos teléfonos en una celda → ahora toma el primero. CORRECCION-F01. |
-| 7  | T19 | localidad | **registrado** | `Morón (Buenos Aires)` → fuera de zona. Comparación literal. |
-| 8  | T21 | localidad | **registrado** | Localidad vacía → fuera de zona. Indistinguible de "vive lejos". |
+| 7  | T19 | localidad | **corregido** | `Morón (Buenos Aires)` → ahora en zona (se saca el paréntesis y se compara el núcleo exacto). CORRECCION-F04. |
+| 8  | T21 | localidad | **corregido** | Localidad vacía → ahora motivo `sin localidad`, y **no descarta**. CORRECCION-F04. |
 | 9  | T31 | dedup     | **registrado** | Perdedor con tel válido: se pierde. No transfiere al ganador. Dedup cambió de CUIL directo a transitivo (consecuencia de CORRECCION-F01). |
 | 10 | T08 | cosmético | no incluido | `.0` de Excel → invalido correcto, sin motivo específico. |
 | 11 | T09 | cosmético | no incluido | Notación científica → invalido correcto, sin aviso de archivo dañado. |
 | 12 | —   | archivo 2 | **corregido** | Basura arriba del header → ahora se saltea y reporta (encabezado detectado en línea 4). F11. |
 | 13 | —   | archivo 3 | **corregido** | Separador `;` → ahora detectado; 5 filas pobladas, 3 en zona, 2 fuera. F11. |
 
-**Registrados (9):** en `verificadores/pendientes_conocidos.py`, verificados por
-`v09_pendientes.py`. La suite los reporta en su propia sección.
+**Registrados: queda 1** (T31), en `verificadores/pendientes_conocidos.py`,
+verificado por `v09_pendientes.py`. La suite lo reporta en su propia sección.
+Arrancaron siendo 9: los 6 de teléfono salieron con CORRECCION-F01 y los 2 de
+localidad con CORRECCION-F04. Un pendiente que se arregla se saca del registro,
+o el registro empieza a mentir en la dirección contraria.
 
 **Corregidos por F11 (12 y 13):** la puerta de entrada detecta separador y
 encabezado, mapea columnas por config y rechaza fuerte lo que no entiende.
-Verificados por `v11_puerta.py` (48/48).
+Verificados por `v11_puerta.py` (72/72).
 
 **No incluidos (2):** cosméticos. El pipeline los clasifica correctamente
 (invalido), pero no avisa del motivo específico (artefacto de Excel).
@@ -275,6 +279,76 @@ Verificados por `v11_puerta.py` (48/48).
 ---
 
 ## Bitácora
+
+**2026-08-02 — CORRECCION-F04: localidad con paréntesis, y "sin localidad" ≠
+"fuera de zona".** Los dos defectos estructurales que quedaban de F04, los dos
+que un archivo real dispara el primer día.
+
+**Paso 1 — los dos conteos, medidos ANTES de tocar nada:**
+
+| Archivo | Filas | A: paréntesis/sufijo que pasaría a en-zona | B: localidad vacía |
+|---------|-------|--------------------------------------------|--------------------|
+| `leads_prueba_SINTETICO_1.csv` | 200 | **0** | **0** |
+| `leads_adversario_1.csv` | 48 | **1** (T19 `Morón (Buenos Aires)`) | **1** (T21) |
+| resto de los archivos (incl. los dos `.xlsx`) | — | 0 | 0 |
+
+**Decisión sobre el golden: intacto.** Con las dos cuentas en **0 sobre las 200
+canónicas**, la corrección es aditiva sobre el golden — es la rama del prompt que
+no requiere regenerar nada. SHA-256 en `9a6884603f91…` y `ae6fcc5f146d…`. Los dos
+únicos casos del repo (T19 y T21) viven en el archivo adversario, que no es el
+que produce el golden.
+
+**Decisión de Pedro sobre el peso de "sin localidad": 0 puntos, no descarta**
+(la propuesta por defecto del prompt). Queda como marca informativa: no cobra el
++20 de en-zona —no sabemos si está en cobertura— pero tampoco se lleva el
+descarte de fuera-de-zona. En la práctica prioriza 20 puntos abajo de un
+contacto confirmado en zona y **sigue en la lista**, que es el punto: un contacto
+sin localidad con teléfono bueno es llamable, lo llamás y ahí te enterás dónde
+vive. Mismo criterio que `desconocida` en F12 y que "sin nombre" en F04.
+
+**Parte A — el núcleo de la localidad.** Antes de comparar contra la zona se saca
+**un** paréntesis final y **un** sufijo `, <resto>`, y después se exige match
+**exacto** sobre lo que queda: `Morón (Buenos Aires)` y `Morón, Buenos Aires` →
+`moron` → en zona; `Moreno` sigue fuera. **Nada de substring ni prefijo** — con
+prefijo, `castelar` matchearía cualquier cosa que empiece con castelar. Misma
+disciplina que F13: explícito o nada.
+
+**Limitación anotada, fuera de alcance:** esto **no desambigua por provincia**.
+Un `San Justo (Santa Fe)` daría en zona igual que el San Justo bonaerense — pero
+ese agujero **ya existe hoy** con el `San Justo` pelado, así que la corrección no
+lo empeora. Desambiguar necesita que la zona lleve provincia en el `config`, y es
+otra sesión.
+
+**Parte B — "sin localidad" es un motivo propio.** La localidad vacía deja de
+caer en "fuera de zona de cobertura" (que descarta) y pasa a `sin localidad`, que
+marca. El cambio se propagó a F06 (bloque de zona con **tres** estados en vez de
+dos) y se verificó **end-to-end**, no solo en el nodo de F04: el punto de la
+parte B no es el texto del motivo, es que la fila **no quede descartada**.
+
+**Verificador.** `v04_cobertura.py`: **46 checks PASA**, y ahora **corre n8n de
+verdad** para los casos nuevos (antes era Python puro sobre el CSV). Los casos de
+la corrección **no** usan `marcar_oraculo()` —ese oráculo replica la lógica del
+nodo, es la 3ª forma de check falso de `prompts/README.md`— sino esperados
+**literales escritos a mano** sobre `data/leads_localidad_1.csv` (5 filas, nuevo),
+mirando `en_zona`, `motivo_descarte` y **`prioridad`**:
+
+| Fila | Localidad | en_zona | motivo_descarte | prioridad |
+|------|-----------|---------|-----------------|-----------|
+| L01 | `Morón (Buenos Aires)` | TRUE | *(vacío)* | alta |
+| L02 | `Morón, Buenos Aires` | TRUE | *(vacío)* | alta |
+| L03 | *(vacía)* | FALSE | `sin localidad` | **media** — no descartada |
+| L04 | `Moreno` | FALSE | `fuera de zona de cobertura` | descartado |
+| L05 | `Morón` | TRUE | *(vacío)* | alta |
+
+Los conteos duros del canónico **no se movieron** (39 fuera de zona, 82 sin
+teléfono, 106 marcados, 15 con dos motivos), que es la confirmación independiente
+del Paso 1.
+
+**Pendientes conocidos: de 3 a 1.** T19 y T21 salieron de
+`pendientes_conocidos.py` porque ahora dan el resultado correcto. Queda solo T31
+(el teléfono del perdedor de la dedup que se pierde). Un pendiente que se arregla
+se saca del registro: si se quedara, el registro pasaría a mentir en la dirección
+contraria.
 
 **2026-08-02 — CORRECCION-F01b: el celular con `15` sin el `0` inicial.** F01
 reconocía el formato viejo con `15` **solo con el 0** (`011 15 6161-7956`); sin

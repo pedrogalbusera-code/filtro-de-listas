@@ -13,31 +13,22 @@ Actualizacion 2026-07-31 (CORRECCION-F01): se sacaron T01-T05 y T10 (6 de
 telefono, todos corregidos). Se actualizo T31 (dedup) porque la correccion
 de T01 cambio el camino de dedup: T01 ahora tiene telefono valido, lo que
 hace que T31 se deduplique por transitividad en vez de por CUIL directo.
+
+Actualizacion 2026-08-02 (CORRECCION-F04): se sacaron T19 y T21, los dos de
+localidad, porque ahora dan el resultado correcto y estan verificados por
+v04_cobertura.py con esperados escritos a mano:
+
+  T19 'Moron (Buenos Aires)' -> en_zona TRUE (el nucleo de la localidad se
+      compara sin el parentesis final ni el sufijo ', provincia').
+  T21 localidad vacia -> motivo 'sin localidad', NO 'fuera de zona', y NO se
+      descarta: sin localidad es marca, no descarte.
+
+Queda UNO: T31. Un pendiente que se arregla se saca de aca; si se quedara,
+el registro pasaria a mentir en la direccion contraria (reportar como
+pendiente algo que ya funciona).
 """
 
 PENDIENTES = [
-    {
-        "id": "T19",
-        "categoria": "localidad",
-        "entrada": "Morón (Buenos Aires)",
-        "esperado_correcto": "en zona (es Moron, la aclaracion entre parentesis no deberia afectar)",
-        "actual_medido": {
-            "en_zona": "FALSE",
-            "motivo_descarte": "fuera de zona de cobertura",
-        },
-        "importa": "Una aclaracion entre parentesis descarta un contacto valido. La comparacion de localidad es demasiado literal.",
-    },
-    {
-        "id": "T21",
-        "categoria": "localidad",
-        "entrada": "",
-        "esperado_correcto": "indeterminado, distinguido de 'fuera de zona'",
-        "actual_medido": {
-            "en_zona": "FALSE",
-            "motivo_descarte": "fuera de zona de cobertura",
-        },
-        "importa": "'No se donde vive' y 'se que vive lejos' quedan indistinguibles. El contacto se descarta sin haber preguntado.",
-    },
     {
         "id": "T31",
         "categoria": "dedup",

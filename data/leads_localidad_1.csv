@@ -1,0 +1,6 @@
+nombre,cuil,telefono,localidad,origen,fecha_carga
+L01 Ana Parentesis,20-43000001-3,011-41617901,Morón (Buenos Aires),referido,2026-07-20
+L02 Bruno Sufijo,27-43000002-6,011-41617902,"Morón, Buenos Aires",referido,2026-07-20
+L03 Celia Sin Localidad,24-43000003-5,011-41617903,,referido,2026-07-20
+L04 Dario Fuera Real,20-43000004-8,011-41617904,Moreno,referido,2026-07-20
+L05 Elsa Control Simple,27-43000005-0,011-41617905,Morón,referido,2026-07-20

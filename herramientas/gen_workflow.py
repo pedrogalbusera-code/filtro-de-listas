@@ -408,6 +408,26 @@ function normLoc(s) {
     .toLowerCase().trim().replace(/\\s+/g, ' ');
 }
 
+// CORRECCION-F04 (parte A): el nucleo de la localidad, sin el adorno con que
+// la escriben las listas reales. 'Moron (Buenos Aires)' y 'Moron, Buenos
+// Aires' son Moron; asi es como viene la mitad de los archivos de un cliente.
+//
+// Se saca UN parentesis final y UN sufijo ', <resto>', y despues se exige
+// match EXACTO sobre lo que queda. Nada de substring ni prefijo: con prefijo,
+// 'castelar' matchearia cualquier cosa que empiece con castelar. Misma
+// disciplina que F13: explicito o nada.
+//
+// FUERA DE ALCANCE, anotado: esto NO desambigua por provincia. Un
+// 'San Justo (Santa Fe)' daria en zona igual que el San Justo bonaerense —
+// pero ese agujero ya existe hoy con el 'San Justo' pelado, asi que esto no
+// lo empeora. Desambiguar necesita que la zona lleve provincia en el config.
+function nucleoLoc(s) {
+  let t = normLoc(s);
+  t = t.replace(/\\s*\\([^)]*\\)\\s*$/, '');   // 'moron (buenos aires)' -> 'moron'
+  t = t.replace(/,.*$/, '');                 // 'moron, buenos aires'   -> 'moron'
+  return t.trim().replace(/\\s+/g, ' ');
+}
+
 const zonaSet = new Set(CONFIG.zona.map(normLoc));
 
 return items.map((item) => {
@@ -419,11 +439,21 @@ return items.map((item) => {
   const nombre = String(json.nombre === undefined || json.nombre === null ? '' : json.nombre).trim();
   if (nombre === '') motivos.push('sin nombre');
 
-  // Fuera de cobertura (suposicion nuestra: la zona). Separado a proposito.
-  const enZona = zonaSet.has(normLoc(json.localidad));
-  if (!enZona) motivos.push('fuera de zona de cobertura');
+  // CORRECCION-F04 (parte B): "no se donde vive" NO es "se que vive lejos".
+  // Antes la localidad vacia caia en 'fuera de zona de cobertura', que
+  // descarta: se tiraba un contacto por un dato que falta, en silencio. Ahora
+  // tiene motivo propio y NO descarta — un contacto sin localidad con telefono
+  // bueno sigue siendo llamable, lo llamas y ahi te enteras donde vive. Es el
+  // mismo criterio que 'desconocida' en F12 y que 'sin nombre' aca al lado:
+  // marca, no descarte.
+  const sinLocalidad = normLoc(json.localidad) === '';
+  const enZona = !sinLocalidad && zonaSet.has(nucleoLoc(json.localidad));
+
+  if (sinLocalidad) motivos.push('sin localidad');
+  else if (!enZona) motivos.push('fuera de zona de cobertura');
 
   json.en_zona = enZona;
+  json.sin_localidad = sinLocalidad;
   json.marcado = motivos.length > 0;
   json.motivo_descarte = motivos.join('; ');
   return { json: json };
@@ -664,7 +694,19 @@ return items.map((item) => {
   }
 
   // 3. Zona
-  if (toBool(json.en_zona)) {
+  //
+  // CORRECCION-F04: tres estados, no dos. 'Sin localidad' NO descarta (decision
+  // de Pedro, 2026-08-02): queda como marca informativa con 0 puntos. No cobra
+  // el bono de zona —no sabemos si esta en cobertura— pero tampoco se lleva el
+  // descarte de fuera-de-zona, porque un contacto sin localidad y con telefono
+  // bueno sigue siendo llamable. En la practica prioriza 20 puntos abajo de uno
+  // confirmado en zona, y sigue en la lista.
+  //
+  // Con la lista canonica sin_localidad es false en las 200 filas, asi que este
+  // bloque produce exactamente el mismo motivo de antes y el golden no se mueve.
+  if (toBool(json.sin_localidad)) {
+    partes.push('sin localidad ' + fmt(0));
+  } else if (toBool(json.en_zona)) {
     score += CONFIG.pesos.zona;
     partes.push('en zona ' + fmt(CONFIG.pesos.zona));
   } else {

@@ -3,6 +3,7 @@ salidas/salida_*.csv
 salidas/reporte_*.md
 salidas/reporte.md
 salidas/_golden_tmp_*
+salidas/_v04_*
 salidas/_v11_*
 salidas/_v12_*
 salidas/_v13_*
