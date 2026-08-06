@@ -100,15 +100,17 @@ def fila_reporte(reporte, etiqueta):
     return int(m.group(1)) if m else None
 
 
-def correr(principal, etiqueta, con_mapeo=True):
+def correr(principal, etiqueta, con_mapeo=True, ficha_path=None):
     """Genera el workflow de fuego, lo importa y lo ejecuta en n8n de verdad.
     Siempre con la misma baja (.xlsx) y la segmentacion del cliente (juridica).
-    'con_mapeo' se apaga solo para probar que el mapeo es load-bearing."""
+    'con_mapeo' se apaga solo para probar que el mapeo es load-bearing.
+    'ficha_path' permite mandar la ficha a un descartable: el caso sinmapeo produce
+    una ficha de RECHAZO y no debe pisar la ficha ACEPTADA que se versiona."""
     stem = os.path.splitext(os.path.basename(principal))[0]
     com = os.path.join(SAL, f"_vfuego_{etiqueta}_com.csv")
     aud = os.path.join(SAL, f"_vfuego_{etiqueta}_aud.csv")
     rep = os.path.join(SAL, f"_vfuego_{etiqueta}_rep.md")
-    ficha = os.path.join(SAL, f"ficha_entrada_{stem}.md")
+    ficha = ficha_path or os.path.join(SAL, f"ficha_entrada_{stem}.md")
     for f in (com, aud, rep):
         if os.path.exists(f):
             os.remove(f)
@@ -423,7 +425,10 @@ def main():
     # no estan en sinonimos.json y la corrida se frena. Es la prueba de que el
     # archivo se resolvio CON config, no que las columnas cayeron por casualidad.
     print("\n--- Bonus: el mapeo del cliente es imprescindible (se resolvió con config) ---")
-    caso_sin = correr(SUCIO, "sinmapeo", con_mapeo=False)
+    # La ficha del sinmapeo es de RECHAZO: va a un descartable (gitignored) para no
+    # pisar la ficha ACEPTADA versionada (ficha_entrada_leads_fuego_1.md).
+    caso_sin = correr(SUCIO, "sinmapeo", con_mapeo=False,
+                      ficha_path=os.path.join(SAL, "_vfuego_sinmapeo_ficha.md"))
     check("(config) sin el mapeo del cliente la corrida SE FRENA "
           "(Documento / Origen del Contacto no están en sinónimos)",
           not caso_sin["exito"], "corrió sin el mapeo: el mapeo no estaría haciendo nada")

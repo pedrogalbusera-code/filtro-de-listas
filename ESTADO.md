@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-08-03
+Última actualización: 2026-08-06
 
 | Fase | Título                          | Estado    | Verificador |
 |------|---------------------------------|-----------|-------------|
@@ -23,6 +23,7 @@
 | —    | CORRECCION-F01b                 | **CERRADA** | v01: 50/50 PASA (el `15` sin el `0`) |
 | —    | CORRECCION-F04                  | **CERRADA** | v04: 46/46 PASA (paréntesis + sin localidad) |
 | **PF** | **Prueba de fuego** (integración de punta a punta) | **VERDE (2026-08-03)** | v_fuego: 68/68 PASA + suite 10/10 + golden intacto — **solo con config, sin código de nodo nuevo** |
+| **CE1** | **CIERRE-ETAPA1** (empaquetado: un comando de regresión, un comando de uso) | **CERRADA (2026-08-06)** | v_procesar: 14/14 PASA · `correr_todo --full`: 16/16 PASA (2306s / ~38 min) + pendientes OK + golden intacto |
 
 ## Decisiones pendientes de Pedro
 
@@ -280,6 +281,60 @@ Verificados por `v11_puerta.py` (72/72).
 ---
 
 ## Bitácora
+
+**2026-08-06 — CIERRE-ETAPA1: empaquetado. Un comando de regresión, un comando
+de uso.** Sin lógica de nodo nueva: `git diff` sobre `gen_workflow.py` vacío. Lo
+que se agregó es empaquetado alrededor del pipeline que ya funcionaba.
+
+**El comando para procesar una lista de cliente** (el camino principal, reemplaza
+los 3-4 pasos manuales de regenerar + import + execute):
+
+```
+python herramientas/procesar.py <archivo> [--mapeo config/X.json] [--baja baja.xlsx]
+       [--segmentacion config/Y.json] [--fecha-corte AAAA-MM-DD] [--salida-dir salidas/]
+```
+
+Reusa el MISMO mecanismo que `v_fuego.correr()` (arma el workflow con
+`gen_workflow.py` y lo corre en n8n por CLI): no reimplementa el pipeline, por
+eso no puede divergir del canónico. Salidas con nombre derivado del archivo
+(nunca pisa el golden ni `salida_comercial.csv`), id de workflow propio, fecha de
+corte siempre impresa (default hoy), y al terminar imprime las 4 rutas + el
+número del reporte. Si la puerta F11 rechaza el archivo: exit ≠ 0 con el motivo
+legible, no un stacktrace — el rechazo es un resultado.
+
+**`verificadores/v_procesar.py`: 14/14 PASA** (corre `procesar.py` de verdad por
+subprocess, como un usuario): (1) canónico byte a byte contra los golden —prueba
+que es el mismo pipeline—; (2) fuego byte a byte contra la corrida de `v_fuego`
+(comercial + auditoría + reporte); (3) el `.txt` de prosa → exit ≠ 0, motivo en
+la salida, sin salida a medias.
+
+**`correr_todo.py --full`**: la default (v00–v08 + golden + pendientes, **10/10**,
+sin cambios: mismo orden, mismo tiempo ~17 min) **más** `v11 v12 v13 v14 v_fuego
+v_procesar` en el mismo loop y la misma tabla. Verde: **16/16 PASA (2306s, ~38
+min)**, pendientes OK, golden SHA-256 intacto (`9a6884603f91…` / `ae6fcc5f146d…`).
+La default sola recuerda al final que los verificadores de archivo corren con
+`--full` — antes quedaban afuera y podían romperse en silencio.
+
+**`workflows/etapa1-final.json` regenerado** con el `gen_workflow.py` actual (el
+versionado había quedado viejo): mismos id/paths/estructura, código de nodo
+refrescado (arrastra CORRECCION-F01/F04 y el passthrough de F11). Sigue dando el
+golden (lo confirma el check de golden de la suite).
+
+**README al día:** `procesar.py` es ahora el camino principal (el flujo manual
+quedó como apéndice), y de "Limitaciones conocidas" se borró **solo lo que hoy
+es falso y tiene un verificador en verde que lo prueba**: el "solo CSV de 6
+columnas sin basura arriba" (F11/`v11`), los formatos de teléfono que
+CORRECCION-F01/F01b ampliaron (`v01`), y la localidad con paréntesis / vacía
+(CORRECCION-F04/`v04`). La de "duplicados que no transfieren datos" se quedó: es
+verdad (T31).
+
+**Un bug de empaquetado que apareció y se arregló:** la ficha versionada del
+fuego (`salidas/ficha_entrada_leads_fuego_1.md`) había quedado commiteada como
+**RECHAZADO** — era la que dejaba el chequeo `sinmapeo` de `v_fuego` (que corre
+último y produce una ficha de rechazo). Ahora ese chequeo escribe la ficha a un
+descartable gitignored, así la versionada es la **ACEPTADA** (separador `;`,
+header en la línea 3, el mapeo de cada columna) — que es el artefacto que se le
+muestra al cliente.
 
 **2026-08-03 — PRUEBA DE FUEGO en verde: el pipeline entero sobre un archivo de
 cliente, resuelto SOLO con config.** El capstone del Nivel 1. No es un filtro

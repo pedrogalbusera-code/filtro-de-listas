@@ -143,60 +143,91 @@ cambio no documentado es un cambio no controlado. Detalle completo en
 - Python 3.10+
 - git
 
-### Pasos
+### Procesar una lista de cliente (camino principal)
+
+Un solo comando procesa el archivo de un cliente —CSV con cualquier separador y
+basura arriba del encabezado, o `.xlsx`, con las columnas renombradas— y devuelve
+los dos CSV, el reporte y la ficha de entrada:
 
 ```powershell
-# 1. Arrancar n8n (Windows, PowerShell)
-.\arrancar-n8n.ps1
-
-# 2. En otra terminal, importar y ejecutar el workflow
-npx n8n import:workflow --input=workflows/etapa1-final.json
-npx n8n execute --id=f08reporte00001
+python herramientas/procesar.py <archivo> --mapeo config/mapeo_<cliente>.json --baja baja.xlsx --segmentacion config/segmentacion_<cliente>.json --fecha-corte 2026-07-28
 ```
 
-Las salidas quedan en `salidas/`: `salida_comercial.csv`, `salida_auditoria.csv`
-y `reporte.md`.
+Todas las opciones salvo `<archivo>` son opcionales. Al terminar imprime las
+rutas de los cuatro archivos generados y el número del reporte (entran /
+llamables / descartados / horas ahorradas), con la fecha de corte usada (default:
+hoy; siempre se imprime). Si la puerta de entrada no entiende el archivo, sale
+con error y el motivo legible: no procesa basura en silencio.
 
-**Nota:** `arrancar-n8n.ps1` setea `N8N_RESTRICT_FILE_ACCESS_TO` a la carpeta
-del proyecto. Sin eso, n8n bloquea el acceso al disco y las fases fallan con
-`Access to the file is not allowed`.
-
-**Nota 2:** las rutas de entrada y salida están embebidas en el JSON del
-workflow como rutas absolutas. Para correrlo en otra máquina, regenerar con:
+Ejemplo, sobre un archivo sucio realista (la prueba de fuego):
 
 ```powershell
-python herramientas/gen_workflow.py workflows/etapa1-final.json "<csv_in>" "<csv_out>" --fase 08 --fecha-corte 2026-07-28 --csv-out-audit "<csv_audit>" --reporte-out "<reporte>"
+python herramientas/procesar.py data/leads_fuego_1.csv --mapeo config/mapeo_fuego.json --baja data/lista_baja_fuego.xlsx --segmentacion config/segmentacion_fuego.json --fecha-corte 2026-07-28
 ```
 
 ### Suite de regresión
 
 ```powershell
-python verificadores/correr_todo.py
+python verificadores/correr_todo.py          # default: v00-v08 + golden (~17 min)
+python verificadores/correr_todo.py --full   # + v11-v14 + fuego + procesar (~38 min)
 ```
 
-Tarda ~12 minutos. Regenera todos los CSVs, corre los 9 verificadores y compara
-contra golden files por SHA-256. Exit 0 si todo pasa.
+Regenera todos los CSVs, corre los verificadores y compara contra golden files
+por SHA-256. La **default** cubre el pipeline canónico (10/10). `--full` agrega
+los **verificadores de archivo** —puerta de entrada, persona física/jurídica,
+basura, opt-out, la prueba de fuego, y `procesar.py` de punta a punta (16/16)—.
+Exit 0 si todo pasa.
+
+### El flujo manual (apéndice)
+
+Correr el workflow versionado a mano, sin `procesar.py`:
+
+```powershell
+.\arrancar-n8n.ps1
+npx n8n import:workflow --input=workflows/etapa1-final.json
+npx n8n execute --id=f08reporte00001
+```
+
+Las salidas quedan en `salidas/`: `salida_comercial.csv`, `salida_auditoria.csv`
+y `reporte.md`. `arrancar-n8n.ps1` setea `N8N_RESTRICT_FILE_ACCESS_TO` a la
+carpeta del proyecto; sin eso n8n bloquea el acceso al disco. El workflow usa
+rutas relativas al repo, así que se importa y corre en cualquier máquina; para
+apuntarlo a otro archivo, regenerarlo con `herramientas/gen_workflow.py` (o usar
+`procesar.py`, que lo hace solo).
 
 ---
 
 ## Limitaciones conocidas
 
-- **El pipeline solo acepta un CSV con 6 columnas específicas** (`nombre`,
-  `cuil`, `telefono`, `localidad`, `origen`, `fecha_carga`), separador coma,
-  sin basura arriba del encabezado. Un archivo real de un cliente probablemente
-  no cumple esto. Es el trabajo de F11, que no está hecho.
-
-- **La normalización de teléfono reconoce 3 formatos** (`+549...` celular,
-  `0XX-...` de 11 dígitos fijo, 10 dígitos pelados ambiguo). Formatos
-  internacionales con espacios, el viejo `011 15 ...`, y teléfonos separados
-  por `/` caen en inválido.
-
-- **La comparación de localidades es literal.** `Morón (Buenos Aires)` cae
-  fuera de zona porque no matchea `Morón`. Localidad vacía es indistinguible
-  de "fuera de zona".
-
 - **Los duplicados no transfieren datos del perdedor al ganador.** Si el
-  perdedor tiene un teléfono válido distinto, se pierde.
+  perdedor tiene un teléfono válido distinto, se pierde. Registrado como
+  pendiente conocido (T31) y verificado por `verificadores/v09_pendientes.py`.
+
+- **En `.xlsx` no se saltea basura arriba del encabezado.** La fila 1 de la
+  hoja *es* el encabezado. En texto (CSV) sí se saltea y se reporta. Por eso la
+  prueba de fuego manda el archivo principal en CSV (con basura arriba) y la
+  lista de baja en `.xlsx` (sin basura). Heredado de F11.
+
+- **La zona no desambigua por provincia.** `San Justo (Santa Fe)` daría en zona
+  igual que el San Justo bonaerense: el núcleo de la localidad se compara sin la
+  provincia. El agujero ya existía con el `San Justo` pelado; desambiguar
+  necesita que la zona lleve provincia en el `config` (otra etapa).
+
+Lo que **ya no** es limitación (fue de F11 en adelante, y hay un verificador en
+verde que lo prueba): el pipeline acepta el archivo de un cliente con cualquier
+separador, basura arriba del encabezado, columnas renombradas por `config/` o
+`.xlsx` (F11, `v11_puerta.py`); la normalización de teléfono reconoce los
+formatos argentinos usuales —`+549`/`+54 9` celular, `+54` sin 9 fijo, `549…`,
+el viejo `15` con o sin el `0`, `011…` fijo, dos teléfonos con `/` toma el
+primero— y solo caen en inválido los que no se pueden resolver, como `15-…` sin
+código de área (`v01_telefono.py`, CORRECCION-F01/F01b); y `Morón (Buenos
+Aires)` / localidad vacía se resuelven bien (CORRECCION-F04, `v04_cobertura.py`).
+
+**Prueba de fuego:** un archivo de cliente sucio y realista (separador `;`,
+basura arriba, columnas renombradas, Latin-1, teléfonos en cualquier formato,
+duplicados, una jurídica, un opt-out) se procesa **solo agregando `config/`**,
+sin tocar una línea de lógica de nodo — verificado de punta a punta por
+`verificadores/v_fuego.py` (68/68).
 
 ---
 
@@ -212,10 +243,13 @@ workflows/
 salidas/                     CSVs y reportes de salida
   HALLAZGOS_ADVERSARIO.md    detalle de los 13 hallazgos
 verificadores/
-  correr_todo.py             suite de regresión (10 checks + 9 pendientes)
-  pendientes_conocidos.py    9 hallazgos adversarios registrados
+  correr_todo.py             suite de regresión (default; --full agrega v11-v14, fuego, procesar)
+  v_fuego.py                 prueba de fuego (archivo de cliente entero, solo config)
+  v_procesar.py              procesar.py corrido de verdad (canónico / fuego / rechazo)
+  pendientes_conocidos.py    hallazgos adversarios registrados
 herramientas/
   gen_workflow.py            generador de workflows
+  procesar.py                procesa una lista de cliente en un comando
 portfolio-entry.html         entrada de portfolio (HTML)
 ```
 

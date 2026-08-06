@@ -32,6 +32,18 @@ VERIFICADORES = [
     ("v08", "v08_reporte.py"),
 ]
 
+# Verificadores de ARCHIVO (corren n8n sobre sus propios archivos, no sobre el
+# canonico). Quedan afuera de la default porque son lentos, pero por eso mismo
+# pueden romperse en silencio: entran con --full. Orden pedido por CIERRE-ETAPA1.
+VERIFICADORES_FULL = [
+    ("v11", "v11_puerta.py"),
+    ("v12", "v12_persona.py"),
+    ("v13", "v13_basura.py"),
+    ("v14", "v14_optout.py"),
+    ("fuego", "v_fuego.py"),
+    ("vproc", "v_procesar.py"),
+]
+
 GOLDEN_COM = os.path.join(BASE, "salidas", "golden_2026-07-28.csv")
 GOLDEN_AUD = os.path.join(BASE, "salidas", "golden_2026-07-28_auditoria.csv")
 GEN = os.path.join(BASE, "herramientas", "gen_workflow.py")
@@ -234,11 +246,17 @@ def main():
     ap = argparse.ArgumentParser(description="Suite de regresion F09")
     ap.add_argument("--golden", action="store_true",
                     help="Regenerar los golden files (no corre la suite)")
+    ap.add_argument("--full", action="store_true",
+                    help="Ademas de la default, corre v11-v14 + v_fuego + v_procesar "
+                         "(verificadores de archivo). La default no cambia.")
     args = ap.parse_args()
 
     if args.golden:
         regenerar_golden()
         return
+
+    # La default NO cambia: misma lista, mismo orden. --full solo AGREGA al final.
+    verifs = VERIFICADORES + (VERIFICADORES_FULL if args.full else [])
 
     print("=" * 65)
     print("  Suite de regresion - F09")
@@ -255,7 +273,7 @@ def main():
 
     resultados = []
 
-    for tag, archivo in VERIFICADORES:
+    for tag, archivo in verifs:
         path = os.path.join(BASE, "verificadores", archivo)
         print(f"\n>>> {tag}: {archivo}")
         t0 = time.time()
@@ -328,6 +346,10 @@ def main():
     print("  " + "-" * 61)
     print(f"  Pendientes conocidos: {resumen_pend}")
     print("=" * 65)
+
+    if not args.full:
+        print("  Nota: los verificadores de archivo (v11-v14, v_fuego, v_procesar)")
+        print("        NO corren en la default. Para incluirlos: correr_todo.py --full")
 
     sys.exit(0 if (fallos == 0 and pend_ok) else 1)
 
