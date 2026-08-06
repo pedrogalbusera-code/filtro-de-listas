@@ -1,0 +1,5 @@
+{
+  "_comentario": "F12 - Segmentacion del cliente de la PRUEBA DE FUEGO. Este cliente vende a INDIVIDUOS, asi que etiqueta el tipo de persona y DESCARTA las juridicas. NO es el default del repo (config/segmentacion.json sigue apagado, intacto, y el golden no se mueve): es la copia que se lleva un cliente que segmenta. Se pasa por --segmentacion.",
+  "etiquetar": true,
+  "descartar": "juridica"
+}

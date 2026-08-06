@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-08-01
+Última actualización: 2026-08-03
 
 | Fase | Título                          | Estado    | Verificador |
 |------|---------------------------------|-----------|-------------|
@@ -22,6 +22,7 @@
 | —    | CORRECCION-F11                  | **CERRADA** | v11: 72/72 PASA (ficha del rechazo blindada) |
 | —    | CORRECCION-F01b                 | **CERRADA** | v01: 50/50 PASA (el `15` sin el `0`) |
 | —    | CORRECCION-F04                  | **CERRADA** | v04: 46/46 PASA (paréntesis + sin localidad) |
+| **PF** | **Prueba de fuego** (integración de punta a punta) | **VERDE (2026-08-03)** | v_fuego: 68/68 PASA + suite 10/10 + golden intacto — **solo con config, sin código de nodo nuevo** |
 
 ## Decisiones pendientes de Pedro
 
@@ -279,6 +280,85 @@ Verificados por `v11_puerta.py` (72/72).
 ---
 
 ## Bitácora
+
+**2026-08-03 — PRUEBA DE FUEGO en verde: el pipeline entero sobre un archivo de
+cliente, resuelto SOLO con config.** El capstone del Nivel 1. No es un filtro
+nuevo: es la prueba de integración de todo lo construido (puerta F11 →
+F01–F08 → F12/F13/F14) sobre un archivo **sucio y realista** de punta a punta.
+
+**El número del reporte** (el entregable que se vende), sobre `leads_fuego_1.csv`:
+
+| Métrica | Valor |
+|---------|-------|
+| Contactos que entran | **25** |
+| Contactos llamables (quedan) | **17** (16 alta + 1 media) |
+| Contactos descartados | **8** |
+| Horas de operador ahorradas | **0,5 h** (8 × 4 min / 60, supuesto documentado) |
+
+Los descartes disparan las **cuatro** categorías, cada una con conteo ≥ 1, y las
+subtablas **suman** al total de 8 (la aritmética cierra):
+
+- **calidad de dato: 5** — sin teléfono 2 (G04 `15-…` sin área, G06 artefacto de
+  Excel), teléfono de relleno 1 (G07 `1111111111`), duplicado 2 (G09 por CUIL,
+  G10 por teléfono normalizado).
+- **zona: 1** (G13 Moreno).
+- **segmento: 1** (G14 jurídica — el cliente vende a individuos).
+- **opt-out: 1** (G15, cruzado contra la lista de baja en `.xlsx`).
+
+**Se resolvió SOLO con config, sin una línea de lógica de nodo nueva.** `git
+diff` sobre `herramientas/gen_workflow.py` y sobre todos los `config/*.json` por
+defecto sale **vacío**. El archivo entero de un cliente se procesó agregando:
+
+- `config/mapeo_fuego.json` — columnas del cliente → canónicas. Es
+  **load-bearing**: `Documento → cuil` y `Origen del Contacto → origen` **no**
+  están en `sinonimos.json` a propósito, así que **sin el mapeo la corrida se
+  frena** (verificado en v_fuego). Es la prueba de que "un cliente nuevo = un
+  config nuevo, no una sesión de programación".
+- `config/segmentacion_fuego.json` — `{etiquetar:true, descartar:"juridica"}`.
+  El default del repo (`config/segmentacion.json`) queda **intacto y apagado**;
+  esta es la copia que se lleva un cliente que segmenta.
+
+**El truco de verificación (el de F11), porque un archivo nuevo no tiene golden
+previo:** el sucio (`;`, 2 filas de basura arriba, columnas del cliente, Latin-1)
+es la **codificación desprolija** de un gemelo limpio que controlamos
+(`leads_fuego_1_limpio.csv`: coma, UTF-8, header fila 1, canónicas). **Mismas
+filas, mismos valores de celda**; la única diferencia es la superficie que la
+puerta neutraliza. **Criterio 1 (equivalencia):** las dos corridas —misma baja,
+mismas configs, solo cambia el principal— dan la salida **byte a byte idéntica**
+en comercial + auditoría + **reporte**. Si difiriera un byte, la puerta habría
+dejado pasar algo de la superficie. La ficha **sí** difiere a propósito (una dice
+`;` + header en la línea 3, la otra `,` + fila 1) y se chequea aparte. Los dos
+gemelos salen de una **fuente única** (`herramientas/gen_fuego.py`), así que no
+pueden divergir en un valor por error.
+
+**Las 15 celdas firma** (una capacidad ganada con sangre cada una) se verifican
+por el **nodo real** con **esperado literal escrito a mano** desde la tabla de la
+fase (nunca contra un oráculo que replique el nodo — el hallazgo de F05): el
+celular `15` sin el 0 (CORRECCION-F01b), el `+54 9` separado, el `15-…` sin área
+que **no** inventa número, los dos teléfonos en una celda, el artefacto de Excel,
+el `1111111111`, el nombre `test` que **marca y no descarta**, los dos duplicados
+(CUIL y teléfono normalizado), `Morón (Buenos Aires)` en zona, la localidad vacía
+que es **media y no "fuera de zona"**, `Moreno` fuera, la jurídica y el opt-out.
+
+**La baja va en `.xlsx`** (`lista_baja_fuego.xlsx`, header fila 1, sin basura
+arriba) para ejercitar ese path; el **principal** lleva la basura arriba y va en
+`;`-CSV, que es el combo que maneja `leerTabla()` — así la prueba **no** toca la
+limitación registrada de `leerPlanilla()` (no saltea basura en planilla).
+
+**Verificador `v_fuego.py`: 68/68 PASA** (corre n8n de verdad, cuatro bloques:
+equivalencia, celdas firma, coherencia del reporte, ficha del sucio + la prueba
+de que el mapeo es imprescindible). **Suite completa: 10/10 PASA (807s), golden
+SHA-256 intacto** (com=`9a6884603f91…` aud=`ae6fcc5f146d…`) — la prueba de fuego
+corre sobre **sus propios archivos**, no sobre el canónico, por eso el golden no
+se movió. **Decisión (anotada, de Pedro si quiere revisarla):** `v_fuego.py`
+queda como **verificador propio**, fuera de `correr_todo.py` — la suite regenera
+y compara el canónico; la prueba de fuego es una integración aparte que se corre
+a mano cuando se toca la puerta o un filtro. **Ningún caso obligó a tocar un
+nodo:** no quedó ningún filtro incompleto que la prueba de fuego haya encontrado.
+
+Con esto el **Nivel 1 queda cerrado de punta a punta** sobre un archivo de
+cliente. Lo que queda es opcional (F15 historial), de trámites (Nivel 2), o la
+prueba con un **archivo real** grande cuando un cliente traiga uno.
 
 **2026-08-02 — CORRECCION-F04: localidad con paréntesis, y "sin localidad" ≠
 "fuera de zona".** Los dos defectos estructurales que quedaban de F04, los dos

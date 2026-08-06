@@ -1,0 +1,18 @@
+{
+  "_comentario": [
+    "Mapeo de columnas del cliente de la PRUEBA DE FUEGO (data/leads_fuego_1.csv)",
+    "a los seis nombres canonicos. Direccion: columna del archivo -> canonica.",
+    "La clave se compara normalizada (minusculas, sin tildes, espacios",
+    "colapsados). Este es 'el config nuevo' que prueba la fase: vender a un",
+    "cliente nuevo = agregar este JSON, no una sesion de programacion.",
+    "'Documento -> cuil' y 'Origen del Contacto -> origen' NO estan en",
+    "config/sinonimos.json a proposito: sin este mapeo la corrida se frena",
+    "pidiendo esas columnas. Es lo que hace al mapeo LOAD-BEARING y no un adorno."
+  ],
+  "Nombre y Apellido": "nombre",
+  "Documento": "cuil",
+  "Celular": "telefono",
+  "Zona": "localidad",
+  "Origen del Contacto": "origen",
+  "Fecha de Alta": "fecha_carga"
+}

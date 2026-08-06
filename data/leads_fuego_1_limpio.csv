@@ -1,0 +1,26 @@
+nombre,cuil,telefono,localidad,origen,fecha_carga
+G01 Lead Alto Valor,20-30110010-9,+54 9 11 3011 2233,Castelar,referido,2026-07-20
+G02 Celular 15 Sin 0,27-30110020-0,11 15 6161 7956,Haedo,referido,2026-07-20
+G03 Celular 9 Separado,20-30110030-3,+54 9 11 4161 7956,Morón,referido,2026-07-20
+G04 Quince Sin Area,20-30110040-0,15-4161-7956,Castelar,referido,2026-07-20
+G05 Dos Telefonos,20-30110050-8,1146669999 / 1155667788,Hurlingham,referido,2026-07-20
+G06 Artefacto Excel,20-30110060-5,1.14162E+09,Ituzaingó,referido,2026-07-20
+G07 Telefono Relleno,20-30110070-2,1111111111,Ramos Mejía,referido,2026-07-20
+test,20-30110081-8,+54 9 11 4777 8888,San Justo,referido,2026-07-20
+G09 Ganador Fresco,20-30110090-7,+54 9 11 4888 9999,Villa Luzuriaga,referido,2026-07-20
+G09b Perdedor Viejo,20-30110090-7,011 4999-0000,Castelar,referido,2026-07-05
+G10 Ganador Fresco,20-30110100-8,11 3392-7555,Haedo,referido,2026-07-20
+G10b Perdedor Viejo,20-30110110-5,011 3392-7555,Morón,referido,2026-07-05
+G11 Localidad Con Parentesis,20-30110120-2,+54 9 11 5011 1222,Morón (Buenos Aires),referido,2026-07-20
+G12 Sin Localidad,20-30110131-8,011 4444-5555,,referido,2026-07-20
+G13 Fuera De Zona,20-30110140-7,+54 9 11 5111 2223,Moreno,referido,2026-07-20
+G14 Persona Juridica,30-71234567-1,+54 9 11 5222 3334,Castelar,referido,2026-07-20
+G15 Opt Out,20-30110150-4,11 4242-4242,Castelar,referido,2026-07-20
+Relleno Uno,20-30220010-7,+54 9 11 6000 0001,Castelar,referido,2026-07-20
+Relleno Dos,27-30220020-9,+54 9 11 6000 0002,Haedo,referido,2026-07-20
+Relleno Tres,20-30220030-1,+54 9 11 6000 0003,Morón,referido,2026-07-20
+Relleno Cuatro,20-30220040-9,+54 9 11 6000 0004,Hurlingham,referido,2026-07-20
+Relleno Cinco,20-30220050-6,+54 9 11 6000 0005,Ituzaingó,referido,2026-07-20
+Relleno Seis,20-30220060-3,+54 9 11 6000 0006,Ramos Mejía,referido,2026-07-20
+Relleno Siete,20-30220070-0,+54 9 11 6000 0007,San Justo,referido,2026-07-20
+Relleno Ocho,20-30220080-8,+54 9 11 6000 0008,Villa Luzuriaga,referido,2026-07-20
